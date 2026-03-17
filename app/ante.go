@@ -1,0 +1,49 @@
+package app
+
+import (
+	"errors"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/engram-network/striatum-core/x/fsm/keeper"
+	fsmtypes "github.com/engram-network/striatum-core/x/fsm/types"
+)
+
+// CircuitBreakerDecorator is an AnteDecorator that runs before transactions are added to the mempool
+type CircuitBreakerDecorator struct {
+	fsmKeeper keeper.Keeper
+}
+
+func NewCircuitBreakerDecorator(fk keeper.Keeper) CircuitBreakerDecorator {
+	return CircuitBreakerDecorator{
+		fsmKeeper: fk,
+	}
+}
+
+// AnteHandle implements the Circuit Breaker logic based on the current FSM state
+func (cbd CircuitBreakerDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, next sdk.AnteHandler) (newCtx sdk.Context, err error) {
+	// 1. Retrieve the current FSM state from the Keeper
+	currentState := cbd.fsmKeeper.GetFSMState(ctx)
+
+	// 2. If the network is in the SOVEREIGN state (Autonomous / Network Partition) [2]
+	if currentState == fsmtypes.StateSovereign {
+		for _, msg := range tx.GetMsgs() {
+			// ACTIVATE CIRCUIT BREAKER: Block all withdrawal transactions or cross-chain asset transfers (IBC Transfer) [1, 2]
+			if isHighRiskTransaction(msg) {
+				return ctx, errors.New("CIRCUIT BREAKER ACTIVE: withdrawals and high-value transactions are halted during SOVEREIGN state")
+			}
+		}
+	}
+
+	// If the transaction is safe or the network is in ANCHORED/SUSPICIOUS state, allow it to proceed
+	return next(ctx, tx, simulate)
+}
+
+// isHighRiskTransaction is a helper function to check the type of transaction
+func isHighRiskTransaction(msg sdk.Msg) bool {
+	// In practice, you would map this to types like banktypes.MsgSend, ibctypes.MsgTransfer...
+	msgType := sdk.MsgTypeURL(msg)
+	if msgType == "/cosmos.bank.v1beta1.MsgSend" || msgType == "/ibc.applications.transfer.v1.MsgTransfer" {
+		return true
+	}
+	return false
+}

@@ -9,6 +9,8 @@ services:
   networks:
     engram_net:
       ipv4_address: 172.20.0.10
+  volumes:
+      - ./build/testnet/node1:/root/.stratium
   ports:
     - "26657:26657" # Tendermint RPC (Dành cho script Python gửi lệnh)
     - "1317:1317"   # Cosmos REST API
