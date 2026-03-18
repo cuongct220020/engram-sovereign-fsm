@@ -1,0 +1,1 @@
+// abci.go: `BeginBlock` function, runs at the start of each block to collect sensor data and automatically transition FSM states.

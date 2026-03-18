@@ -1,0 +1,1 @@
+// Dummy ZK circuit representing block compression power.

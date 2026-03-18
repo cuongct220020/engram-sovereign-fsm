@@ -1,0 +1,1 @@
+// Measures CPU time for generating "Super-proof" (O(NlogN)).
