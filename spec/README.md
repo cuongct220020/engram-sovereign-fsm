@@ -1,6 +1,25 @@
-# Formal Specification of Engram FSM
+# Formal Specification of Engram FSM (Draft)
 
 This directory contains the formal mathematical specification of the **Adaptive Consensus FSM (Finite State Machine)** for the Engram Protocol network. The model is written in **TLA+** to verify the correctness of the system design under network partition scenarios.
+
+
+Việc thực thi của một hệ thống máy tính có thể được biểu diễn bằng một chuỗi các trạng thái (states) rời rạc
+- Trạng thái (State): Là một phép gán giá trị cho tất cả các biến trong hệ thống 
+- Hành vi (Behavior): Là một chuỗi (sequence) vô hạn các trạng thái.
+  - Chuỗi hợp lệ là một chuỗi mô tả đúng hành vi mà hệ thống vận hành. 
+
+$$Spec_{Engram} \triangleq \text{Init} \land \Box[\text{Next}]_{vars}$$
+
+
+- Tập không gian trạng thái
+$$S \triangleq S_i:i \in \{ANCHORED, SUSPICIOUS, SOVEREIGN, RECOVERING\}$$
+
+- Trạng thái ban đầu (trạng thái khởi tạo)
+$$Init \triangleq S_{ANCHORED} \land (\Delta H = 0)$$
+
+
+- Tập các hàm chuyển đổi trạng thái
+$$\text{Next} \triangleq \text{AnchoredToSuspicious} \lor \text{SuspciousToSovereign} \lor \text{SovereignToRecovering} \lor \text{RecoveringToAnchored} \lor \text{AnchoredToSovereign}$$
 
 ## 1. System Model Overview
 

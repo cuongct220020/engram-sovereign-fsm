@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
@@ -13,7 +15,7 @@ plt.rcParams.update({
     "legend.fontsize": 12,
     "xtick.labelsize": 12,
     "ytick.labelsize": 12,
-    "pdf.fonttype": 42             # Đảm bảo font được nhúng chuẩn vào file PDF
+    "pdf.fonttype": 42
 })
 
 def plot_latency_chart():

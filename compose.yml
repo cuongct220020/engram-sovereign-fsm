@@ -1,0 +1,137 @@
+name: Engram-app Chain
+
+services:
+  node0:
+  build: 
+    context: .
+    dockerfile: Dockerfile
+  container_name: engram_node0
+  networks:
+    engram-net:
+      ipv4_address: 172.20.0.10
+  volumes:
+      - ./build/testnet/node1:/root/.stratium
+  ports:
+    - "26657:26657" # Tendermint RPC (Dành cho script Python gửi lệnh)
+    - "1317:1317"   # Cosmos REST API
+    - "26660:26660" # Prometheus Metrics
+  environment:
+    - DA_ENDPOINT=http://celestia_mock:8080
+    - MINIMUM_GAS_PRICES=0strat
+  command: ["stratiumd", "start", "--prometheus"]
+  # develop:
+  #   watch:
+
+
+
+  
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./scripts/telemetry/prometheus.yml:/etc/prometheus/prometheus.yml
+  
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+
+  bitcoin-node:
+    image: bitcoin/bitcoin:${HASH_TAG}
+    container_name: bitcoin_regtest_engram
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+    ports:
+      - "127.0.0.1:18443:18443" # RPC: Chỉ cho phép localhost truy cập để bảo mật
+      - "18444:18444"           # P2P: Mở để các node bitcoin khác (nếu có) kết nối
+      - "28332:28332"           # ZMQ Block (Mới)
+      - "28333:28333"           # ZMQ Transaction (Mới)
+
+    environment:
+      - BITCOIN_DATA=/home/bitcoin/.bitcoin
+
+    volumes:
+      # Mount dữ liệu ra máy host để không mất blockchain data khi restart
+      - ./bitcoin_data:/home/bitcoin/.bitcoin
+      # Mount file cấu hình riêng (nếu cần tùy chỉnh sâu)
+      # - ./bitcoin.conf:/home/bitcoin/.bitcoin/bitcoin.conf
+
+    command:
+      - -regtest=1            # Chế độ thử nghiệm, tự tạo block
+      - -server=1             # Chấp nhận các lệnh RPC
+      - -txindex=1            # Quan trọng: Cho phép Vigilantes tra cứu mọi transaction ID
+      - -printtoconsole=1     # Đẩy log ra docker logs để dễ debug
+      - -rpcbind=0.0.0.0      # Lắng nghe RPC từ trong mạng docker
+      - -rpcallowip=0.0.0.0/0 # Cho phép các service khác trong compose gọi RPC
+      # Cấu hình xác thực (Nên đưa vào file .env)
+      - -rpcuser=${RPC_USER:-engram_admin}
+      - -rpcpassword=${RPC_PASSWORD:-secure_password_123}
+      - -fallbackfee=0.00001
+      - -maxtxfee=0.1
+      - -zmqpubrawblock=tcp://0.0.0.0:28332
+      - -zmqpubrawtx=tcp://0.0.0.0:28333
+
+
+# # 1. Tạo ví mặc định cho Engram System
+# docker exec bitcoin_regtest_engram bitcoin-cli -regtest -rpcuser=engram_admin -rpcpassword=secure_password_123 createwallet "engram_vault"
+
+# # 2. Lấy một địa chỉ mới
+# ADDRESS=$(docker exec bitcoin_regtest_engram bitcoin-cli -regtest -rpcuser=engram_admin -rpcpassword=secure_password_123 getnewaddress)
+
+# # 3. Generate 101 blocks để bắt đầu có số dư (mô phỏng coinbase maturity)
+# docker exec bitcoin_regtest_engram bitcoin-cli -regtest -rpcuser=engram_admin -rpcpassword=secure_password_123 generatetoaddress 101 $ADDRESS
+
+# # 4. Kiểm tra số dư
+# docker exec bitcoin_regtest_engram bitcoin-cli -regtest -rpcuser=engram_admin -rpcpassword=secure_password_123 getbalance
+
+# pip instal pyzmq
+# import zmq
+# import binascii
+
+# def start_monitor():
+#     context = zmq.Context()
+#     # Tạo socket kiểu SUB (Subscriber)
+#     subscriber = context.socket(zmq.SUB)
+  
+#     # Kết nối tới cổng ZMQ Block của Bitcoin Node
+#     subscriber.connect("tcp://localhost:28332")
+  
+#     # Đăng ký nhận tin nhắn liên quan đến "rawblock"
+#     subscriber.setsockopt_string(zmq.SUBSCRIBE, "rawblock")
+
+#     print("Vigilante Monitor đang lắng nghe Bitcoin Regtest...")
+
+#     try:
+#         while True:
+#             # Nhận tin nhắn (gồm 2 phần: topic và body)
+#             topic, body, seq = subscriber.recv_multipart()
+          
+#             if topic == b"rawblock":
+#                 # Chuyển đổi dữ liệu binary sang hex để đọc
+#                 block_hash = binascii.hexlify(body).decode('utf-8')
+#                 print(f" New Block Detected! Hash: {block_hash[:64]}...")
+              
+#                 # Tại đây, bạn có thể gọi RPC để lấy chi tiết block 
+#                 # và cập nhật trạng thái cho Engram App-chain.
+              
+#     except KeyboardInterrupt:
+#         print("Dừng Monitor.")
+#     finally:
+#         subscriber.close()
+#         context.term()
+
+# if __name__ == "__main__":
+#     start_monitor()
+
+networks:
+  engram-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+          gateway: 172.20.0.1
+    driver_opts:
+      com.docker.network.bridge.name: "br-engram"

@@ -1,14 +1,8 @@
-# Stratium Core
+# Stratium Core Prototype (in-progress)
 
 ## Prerequisites
 - IDE: VSCode
-- Extensions
-
-
-## File and Directory Roles
-- **Dockerfile & docker-compose.yml**: Packages the `stratiumd` node and sets up a virtual network (4 Engram nodes, 1 Celestia mock node, Prometheus, Grafana) for network disconnection testing.
-- **Makefile**: Contains shorthand commands (e.g., `make build`, `make test`, `make verify-fsm`) to help reviewers easily rerun all your experiments without remembering complex commands.
-- **go.mod & go.sum**: Manages Go dependencies (notably Cosmos SDK and CometBFT).
+- Extensions: `TLA+ (Temporal Logic of Actions)`, `Graphviz Interactive Preview`, `Markdown All in One`
 
 
 ## The Big Merge
