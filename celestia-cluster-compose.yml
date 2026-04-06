@@ -1,0 +1,69 @@
+name: Celestia Local Cluster
+
+services:
+  celestia-validator:
+    image: ghcr.io/celestiaorg/celestia-app:${CELESTIA_APP_VERSION:-v1.11.0}
+    hostname: celestia-validator
+    container_name: celestia-validator
+    networks:
+      - engram-net
+    environment:
+      - CELESTIA_CHAIN_ID=engram-dev-1
+    volumes:
+      - ./data/celestia-validator-data:/home/celestia
+    ports:
+      - "26657:26657" # RPC
+      - "9090:9090"   # gRPC for Blobstream/Query
+    command: >
+      sh -c "
+      if [ ! -f /home/celestia/config/config.toml ]; then
+        celestia-appd init mynode --chain-id engram-dev-1 &&
+        celestia-appd keys add admin --keyring-backend test >> /home/celestia/admin_seed.txt 2>&1
+      fi
+      celestia-appd start --rpc.laddr tcp://0.0.0.0:26657
+      "
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+
+ 
+
+  celestia-bridge:
+    image: ghcr.io/celestiaorg/celestia-node:{CELESTIA_NODE_VERSION:-v0.14.1}
+    hostname: celestia-bridge
+    container_name: celestia-bridge
+    depends_on:
+      - celestia-app
+    volumes:
+      - ./data/celestia-bridge-data:/home/celestia
+    environment:
+      - NODE_TYPE=bridge
+      - P2P_NETWORK=private
+    command: >
+      sh -c "
+      celestia bridge init --p2p.network private &&
+      celestia bridge start --core.ip celestia-app --p2p.network private --rpc.addr 0.0.0.0 --rpc.port 26658
+      "
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    networks:
+      - engram-net
+ 
+
+ 
+networks:
+  celestia-network:
+    driver: bridge
+  engram-net:
+    name: engram-net
+    external: true
+
+
+volumes:
+  celestia-validator-data:
+    name: celestia-validator-data
+  celestia-bridge-data:
+    name: celestia-bridge-data
