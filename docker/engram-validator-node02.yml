@@ -1,0 +1,233 @@
+name: engram-validator-node02
+
+services:
+  stratium-node02:
+    build: 
+      context: ..
+      dockerfile: Dockerfile
+    hostname: stratium-node02
+    container_name: stratium-node02
+    networks:
+      engram-net:
+        ipv4_address: 172.20.0.110
+    volumes:
+      - stratium-node02-data:/root/.stratium
+    ports:
+      # Offset ports by 100 to avoid conflicts
+      - "26757:26657"   # Tendermint RPC (exposed)
+      - "1417:1317"     # Cosmos REST API (exposed)
+      - "26760:26660"   # Prometheus Metrics (exposed)
+    environment:
+      - DA_ENDPOINT=http://celestia-light02:26658
+      - MINIMUM_GAS_PRICES=0strat
+      - MONIKER=stratium-node02
+      - NODE_ID=1
+    command: ["stratiumd", "start", "--prometheus"]
+    restart: unless-stopped
+    depends_on:
+      celestia-light02:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:26657/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 768M
+        reservations:
+          cpus: '0.2'
+          memory: 256M
+
+  # VIGILANTE SUBMITTER 
+  vigilante-submitter02:
+    image: babylonlabs/babylond:main${BABYLOND_VERSION:-.latest}
+    container_name: vigilante-submitter02
+    hostname: vigilante-submitter02
+    networks:
+      engram-net:
+        ipv4_address: 172.20.0.111
+      bitcoin-net:
+        ipv4_address: 172.21.0.110
+    volumes:
+      - ../config/submitter.toml:/home/babylon/config/submitter.toml:ro
+      - vigilante-submitter02-data:/home/babylon/.babylon
+    environment:
+      - NODE_ADDR=http://stratium-node02:26657
+      - BITCOIN_HOST=bitcoin-node01
+      - BITCOIN_RPC_PORT=18443
+      - NODE_ID=1
+    restart: unless-stopped
+    depends_on:
+      stratium-node02:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.15'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+    command:
+      - vigilante
+      - submitter
+      - --config=/home/babylon/config/submitter.toml
+
+  #  VIGILANTE REPORTER 
+  vigilante-reporter02:
+    image: babylonlabs/babylond:main${BABYLOND_VERSION:-.latest}
+    container_name: vigilante-reporter02
+    hostname: vigilante-reporter02
+    networks:
+      engram-net:
+        ipv4_address: 172.20.0.112
+      bitcoin-net:
+        ipv4_address: 172.21.0.111
+    volumes:
+      - ../config/reporter.toml:/home/babylon/config/reporter.toml:ro
+      - vigilante-reporter-1-data:/home/babylon/.babylon
+    environment:
+      - NODE_ADDR=http://stratium-node02:26657
+      - BITCOIN_HOST=bitcoin-node01
+      - NODE_ID=1
+    restart: unless-stopped
+    depends_on:
+      stratium-node02:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.15'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+    command:
+      - vigilante
+      - reporter
+      - --config=/home/babylon/config/reporter.toml
+
+  #  VIGILANTE MONITOR 
+  checkpointing-monitor02:
+    image: babylonlabs/babylond:main${BABYLOND_VERSION:-.latest}
+    container_name: checkpointing-monitor02
+    hostname: checkpointing-monitor02
+    networks:
+      engram-net:
+        ipv4_address: 172.20.0.113
+      bitcoin-net:
+        ipv4_address: 172.21.0.112
+    volumes:
+      - ../config/monitor.toml:/home/babylon/config/monitor.toml:ro
+      - checkpointing-monitor02-data:/home/babylon/.babylon
+    environment:
+      - NODE_ADDR=http://stratium-node-1:26657
+      - BITCOIN_HOST=bitcoin-node01
+      - NODE_ID=1
+    restart: unless-stopped
+    depends_on:
+      stratium-node02:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 100M
+        reservations:
+          cpus: '0.05'
+          memory: 50M
+    command:
+      - vigilante
+      - monitor
+      - --config=/home/babylon/config/monitor.toml
+
+  # CELESTIA LIGHT CLIENT
+  celestia-light02:
+    image: ghcr.io/celestiaorg/celestia-node:${CELESTIA_NODE_VERSION:-v0.14.1}
+    container_name: celestia-light02
+    hostname: celestia-light02
+    networks:
+      engram-net:
+        ipv4_address: 172.20.0.114
+      celestia-net:
+        ipv4_address: 172.22.0.110
+    volumes:
+      - celestia-light02-data:/home/celestia
+    ports:
+      - "26758:26658"   # RPC (exposed, offset by 100)
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-s", "http://127.0.0.1:26658/header/1 || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      celestia-bridge:
+        condition: service_healthy
+    environment:
+      - NODE_TYPE=light
+      - P2P_NETWORK=private
+      - NODE_ID=1
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    command: >
+      sh -c "
+      if [ ! -d /home/celestia/.light ]; then
+        celestia light init --p2p.network private --ip 0.0.0.0
+      fi
+      celestia light start --core.ip celestia-bridge --p2p.network private --rpc.addr 0.0.0.0 --rpc.port 26658
+      "
+
+networks:
+  engram-net:
+    name: engram-net
+    external: true
+  bitcoin-net:
+    name: bitcoin-net
+    external: true
+  celestia-net:
+    name: celestia-net
+    external: true
+
+volumes:
+  stratium-node02-data:
+    name: stratium-node02-data
+    driver: local
+  vigilante-submitter02-data:
+    name: vigilante-submitter02-data
+    driver: local
+  vigilante-reporter02-data:
+    name: vigilante-reporter02-data
+    driver: local
+  checkpointing-monitor02-data:
+    name: checkpointing-monitor02-data
+    driver: local
+
+
+volumes:
+  stratium-node02-data:
+    name: stratium-node02-data
+    driver: local
+  vigilante-submitter02-data:
+    name: vigilante-submitter02-data
+    driver: local
+  vigilante-reporter02-data:
+    name: vigilante-reporter02-data
+    driver: local
+  checkpointing-monitor02-data:
+    name: checkpointing-monitor02-data
+    driver: local
+  celestia-light02-data:
+    name: celestia-light02-data
+    driver: local

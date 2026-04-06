@@ -1,0 +1,100 @@
+name: bitcoin-regtest-cluster
+
+services:
+  bitcoin-node01:
+    image: public.ecr.aws/bitnami/bitcoin:${BITCOIN_HASH_TAG:-27.0.0}
+    container_name: bitcoin-node01
+    hostname: bitcoin-node01
+    networks:
+      - engram-net
+      - bitcoin-net
+    ports:
+      - "18443:18443"
+      - "28332:28332"
+      - "28333:28333"
+    environment:
+      - BITCOIN_NETWORK=regtest
+      - BITCOIN_RPC_USER=${BITCOIN_RPC_USER:-engram_admin}
+      - BITCOIN_RPC_PASSWORD=${BITCOIN_RPC_PASSWORD:-secure_password_123}
+    volumes:
+      - ./data/bitcoin-node01:/bitnami/bitcoin/data
+    command:
+      - -txindex=1
+      - -zmqpubrawblock=tcp://0.0.0.0:28332
+      - -zmqpubrawtx=tcp://0.0.0.0:28333
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -dbcache=100
+      - -maxmempool=50
+      - -maxconnections=25
+      - -par=2
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-rpcuser=engram_admin", "-rpcpassword=secure_password_123", "getblockcount"]
+      interval: 30s
+      timeout: 5s
+      retries: 2
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+
+  bitcoin-node02:
+    image: public.ecr.aws/bitnami/bitcoin:${BITCOIN_HASH_TAG:-27.0.0}
+    container_name: bitcoin-node02
+    hostname: bitcoin-node02
+    networks:
+      - engram-net
+      - bitcoin-net
+    ports:
+      - "19443:18443"
+      - "29332:28332"
+      - "29333:28333"
+    environment:
+      - BITCOIN_NETWORK=regtest
+      - BITCOIN_RPC_USER=${BITCOIN_RPC_USER:-engram_admin}
+      - BITCOIN_RPC_PASSWORD=${BITCOIN_RPC_PASSWORD:-secure_password_123}
+    volumes:
+      - ./data/bitcoin-node02:/bitnami/bitcoin/data
+    command:
+      - -txindex=1
+      - -zmqpubrawblock=tcp://0.0.0.0:28332
+      - -zmqpubrawtx=tcp://0.0.0.0:28333
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -dbcache=100
+      - -maxmempool=50
+      - -maxconnections=25
+      - -par=2
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-rpcuser=engram_admin", "-rpcpassword=secure_password_123", "getblockcount"]
+      interval: 30s
+      timeout: 5s
+      retries: 2
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+
+
+networks:
+  bitcoin-net:
+    name: bitcoin-net
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: "br-bitcoin"
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
+          gateway: 172.21.0.1

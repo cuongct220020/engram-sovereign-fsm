@@ -1,0 +1,243 @@
+name: engram-validator-node01
+
+services:
+  stratium-node01:
+    build: 
+      context: ..
+      dockerfile: Dockerfile
+    hostname: stratium-node01
+    container_name: stratium-node01
+    networks:
+      engram-net:
+        ipv4_address: 172.20.0.100
+    volumes:
+      - stratium-node01-data:/root/.stratium
+    ports:
+      # Only expose RPC, REST for external access
+      - "26657:26657"   # Tendermint RPC (exposed)
+      - "1317:1317"     # Cosmos REST API (exposed)
+      - "26660:26660"   # Prometheus Metrics (exposed)
+    environment:
+      - DA_ENDPOINT=http://celestia-light01:26658
+      - MINIMUM_GAS_PRICES=0strat
+      - MONIKER=stratium-node01
+      - NODE_ID=0
+    command: ["stratiumd", "start", "--prometheus"]
+    restart: unless-stopped
+    depends_on:
+      celestia-light01:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:26657/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 768M
+        reservations:
+          cpus: '0.2'
+          memory: 256M
+
+
+
+  vigilante-submitter01:
+    image: babylonlabs/babylond:main${BABYLOND_VERSION:-.latest}
+    hostname: vigilante-submitter01
+    container_name: vigilante-submitter01
+    networks:
+      engram-net:
+        ipv4_address: 172.20.0.101
+      bitcoin-net:
+        ipv4_address: 172.21.0.100
+    volumes:
+      - ../config/submitter.toml:/home/babylon/config/submitter.toml:ro
+      - vigilante-submitter-0-data:/home/babylon/.babylon
+    environment:
+      - NODE_ADDR=http://stratium-node01:26657
+      - BITCOIN_HOST=bitcoin-node01
+      - BITCOIN_RPC_PORT=18443
+      - NODE_ID=0
+    restart: unless-stopped
+    depends_on:
+      stratium-node01:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.15'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+    command:
+      - vigilante
+      - submitter
+      - --config=/home/babylon/config/submitter.toml
+
+
+  vigilante-reporter01:
+    image: babylonlabs/babylond:main${BABYLOND_VERSION:-.latest}
+    hostname: vigilante-reporter01
+    container_name: vigilante-reporter01
+    networks:
+      engram-net:
+        ipv4_address: 172.20.0.102
+      bitcoin-net:
+        ipv4_address: 172.21.0.101
+    volumes:
+      - ../config/reporter.toml:/home/babylon/config/reporter.toml:ro
+      - vigilante-reporter01-data:/home/babylon/.babylon
+    environment:
+      - NODE_ADDR=http://stratium-node01:26657
+      - BITCOIN_HOST=bitcoin-node01
+      - NODE_ID=0
+    restart: unless-stopped
+    depends_on:
+      stratium-node01:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.15'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+    command:
+      - vigilante
+      - reporter
+      - --config=/home/babylon/config/reporter.toml
+
+  # VIGILANTE CHECKPOINTING MONITOR 
+  checkpointing-monitor01:
+    image: babylonlabs/babylond:main${BABYLOND_VERSION:-.latest}
+    hostname: checkpointing-monitor01
+    container_name: checkpointing-monitor01
+    networks:
+      engram-net:
+        ipv4_address: 172.20.0.103
+      bitcoin-net:
+        ipv4_address: 172.21.0.102
+    volumes:
+      - ../config/monitor.toml:/home/babylon/config/monitor.toml:ro
+      - checkpointing-monitor-0-data:/home/babylon/.babylon
+    environment:
+      - NODE_ADDR=http://stratium-node01:26657
+      - BITCOIN_HOST=bitcoin-node01
+      - NODE_ID=0
+    restart: unless-stopped
+    depends_on:
+      stratium-node01:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 100M
+        reservations:
+          cpus: '0.05'
+          memory: 50M
+    command:
+      - vigilante
+      - monitor
+      - --config=/home/babylon/config/monitor.toml
+
+
+  # CELESTIA LIGHT CLIENT
+  celestia-light01:
+    image: ghcr.io/celestiaorg/celestia-node:${CELESTIA_NODE_VERSION:-v0.14.1}
+    hostname: celestia-light01
+    container_name: celestia-light01
+    networks:
+      engram-net:
+        ipv4_address: 172.20.0.104
+      celestia-net:
+        ipv4_address: 172.22.0.100
+    volumes:
+      - celestia-light01-data:/home/celestia
+    ports:
+      - "26658:26658"   # RPC (exposed)
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-s", "http://127.0.0.1:26658/header/1 || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      celestia-bridge:
+        condition: service_healthy
+    environment:
+      - NODE_TYPE=light
+      - P2P_NETWORK=private
+      - NODE_ID=0
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    command: >
+      sh -c "
+      if [ ! -d /home/celestia/.light ]; then
+        celestia light init --p2p.network private --ip 0.0.0.0
+      fi
+      celestia light start --core.ip celestia-bridge --p2p.network private --rpc.addr 0.0.0.0 --rpc.port 26658
+      "
+
+networks:
+  # Main validator network (shared across all nodes)
+  engram-net:
+    name: engram-net
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: "br-engram"
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+          gateway: 172.20.0.1
+
+  # Bitcoin network (isolated, services from different validators can connect)
+  bitcoin-net:
+    name: bitcoin-net
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: "br-bitcoin"
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
+          gateway: 172.21.0.1
+
+  # Celestia network (isolated, for DA layer)
+  celestia-net:
+    name: celestia-net
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: "br-celestia"
+    ipam:
+      config:
+        - subnet: 172.22.0.0/24
+          gateway: 172.22.0.1
+
+volumes:
+  stratium-node01-data:
+    name: stratium-node01-data
+    driver: local
+  vigilante-submitter01-data:
+    name: vigilante-submitter01-data
+    driver: local
+  vigilante-reporter01-data:
+    name: vigilante-reporter01-data
+    driver: local
+  checkpointing-monitor01-data:
+    name: checkpointing-monitor01-data
+    driver: local
+  celestia-light01-data:
+    name: celestia-light01-data
+    driver: local
