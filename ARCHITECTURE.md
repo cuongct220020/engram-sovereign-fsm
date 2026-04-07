@@ -1,137 +1,8 @@
-# Stratium Infrastructure Architecture
+# Infrastructure Architecture
 
-## Network Topology
+## High-Level Architecture (Mermaid Diagram)
 
-### High-Level Architecture (Mermaid Diagram)
-
-```mermaid
-graph TB
-    subgraph EngHost["🐳 Docker Host"]
-        subgraph EngNet["🌐 engram-net (172.20.0.0/24)"]
-            Prom["📊 Prometheus<br/>172.20.0.20:9090"]
-            Grafana["📈 Grafana<br/>172.20.0.21:3000"]
-            
-            subgraph Val0["⚙️ Validator Node 0"]
-                SN0["stratium-node-0<br/>172.20.0.100<br/>RPC:26657 REST:1317"]
-                VS0["vigilante-submitter-0<br/>172.20.0.101"]
-                VR0["vigilante-reporter-0<br/>172.20.0.102"]
-                VM0["checkpointing-monitor-0<br/>172.20.0.103"]
-                CL0["celestia-light-0<br/>172.20.0.104<br/>RPC:26658"]
-            end
-            
-            subgraph Val1["⚙️ Validator Node 1"]
-                SN1["stratium-node-1<br/>172.20.0.110<br/>RPC:26757 REST:1417"]
-                VS1["vigilante-submitter-1<br/>172.20.0.111"]
-                VR1["vigilante-reporter-1<br/>172.20.0.112"]
-                VM1["checkpointing-monitor-1<br/>172.20.0.113"]
-                CL1["celestia-light-1<br/>172.20.0.114<br/>RPC:26758"]
-            end
-            
-            subgraph Val2["⚙️ Validator Node 2"]
-                SN2["stratium-node-2<br/>172.20.0.120<br/>RPC:26857 REST:1517"]
-                VS2["vigilante-submitter-2<br/>172.20.0.121"]
-                VR2["vigilante-reporter-2<br/>172.20.0.122"]
-                VM2["checkpointing-monitor-2<br/>172.20.0.123"]
-                CL2["celestia-light-2<br/>172.20.0.124<br/>RPC:26759"]
-            end
-            
-            subgraph Val3["⚙️ Validator Node 3"]
-                SN3["stratium-node-3<br/>172.20.0.130<br/>RPC:26957 REST:1617"]
-                VS3["vigilante-submitter-3<br/>172.20.0.131"]
-                VR3["vigilante-reporter-3<br/>172.20.0.132"]
-                VM3["checkpointing-monitor-3<br/>172.20.0.133"]
-                CL3["celestia-light-3<br/>172.20.0.134<br/>RPC:26760"]
-            end
-            
-            SN0 --> VS0
-            SN0 --> VR0
-            SN0 --> VM0
-            SN0 --> CL0
-            SN1 --> VS1
-            SN1 --> VR1
-            SN1 --> VM1
-            SN1 --> CL1
-            SN2 --> VS2
-            SN2 --> VR2
-            SN2 --> VM2
-            SN2 --> CL2
-            SN3 --> VS3
-            SN3 --> VR3
-            SN3 --> VM3
-            SN3 --> CL3
-        end
-        
-        subgraph BitNet["🔗 bitcoin-net (172.21.0.0/24)<br/>ISOLATED"]
-            BTC01["bitcoin-node-01<br/>172.21.0.10<br/>RPC:18443"]
-            VS0B["vigilante-submitter-0<br/>172.21.0.100"]
-            VR0B["vigilante-reporter-0<br/>172.21.0.101"]
-            VM0B["checkpointing-monitor-0<br/>172.21.0.102"]
-            VS1B["vigilante-submitter-1<br/>172.21.0.110"]
-            VR1B["vigilante-reporter-1<br/>172.21.0.111"]
-            VM1B["checkpointing-monitor-1<br/>172.21.0.112"]
-            VS2B["vigilante-submitter-2<br/>172.21.0.120"]
-            VR2B["vigilante-reporter-2<br/>172.21.0.121"]
-            VM2B["checkpointing-monitor-2<br/>172.21.0.122"]
-            VS3B["vigilante-submitter-3<br/>172.21.0.130"]
-            VR3B["vigilante-reporter-3<br/>172.21.0.131"]
-            VM3B["checkpointing-monitor-3<br/>172.21.0.132"]
-        end
-        
-        subgraph CelNet["🌌 celestia-net (172.22.0.0/24)<br/>ISOLATED"]
-            CApp["celestia-app<br/>172.22.0.10<br/>RPC:26657"]
-            CL0C["celestia-light-0<br/>172.22.0.100"]
-            CL1C["celestia-light-1<br/>172.22.0.101"]
-            CL2C["celestia-light-2<br/>172.22.0.102"]
-            CL3C["celestia-light-3<br/>172.22.0.103"]
-        end
-        
-        VS0 -.->|connect| VS0B
-        VR0 -.->|connect| VR0B
-        VM0 -.->|connect| VM0B
-        VS0B --> BTC01
-        VR0B --> BTC01
-        VM0B --> BTC01
-        
-        VS1 -.->|connect| VS1B
-        VR1 -.->|connect| VR1B
-        VM1 -.->|connect| VM1B
-        VS1B --> BTC01
-        VR1B --> BTC01
-        VM1B --> BTC01
-        
-        VS2 -.->|connect| VS2B
-        VR2 -.->|connect| VR2B
-        VM2 -.->|connect| VM2B
-        VS2B --> BTC01
-        VR2B --> BTC01
-        VM2B --> BTC01
-        
-        VS3 -.->|connect| VS3B
-        VR3 -.->|connect| VR3B
-        VM3 -.->|connect| VM3B
-        VS3B --> BTC01
-        VR3B --> BTC01
-        VM3B --> BTC01
-        
-        CL0 -.->|connect| CL0C
-        CL1 -.->|connect| CL1C
-        CL2 -.->|connect| CL2C
-        CL3 -.->|connect| CL3C
-        
-        CL0C --> CApp
-        CL1C --> CApp
-        CL2C --> CApp
-        CL3C --> CApp
-    end
-    
-    style EngNet fill:#e1f5ff,stroke:#0288d1,stroke-width:2px
-    style BitNet fill:#fff3e0,stroke:#f57c00,stroke-width:2px
-    style CelNet fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
-    style Val0 fill:#c8e6c9,stroke:#388e3c
-    style Val1 fill:#c8e6c9,stroke:#388e3c
-    style Val2 fill:#c8e6c9,stroke:#388e3c
-    style Val3 fill:#c8e6c9,stroke:#388e3c
-```
+### Validator Node Structure (Mermaid Diagram)
 
 ### IP Addressing Scheme
 
@@ -166,60 +37,7 @@ Network: 172.22.0.0/24 (celestia-net) - Celestia DA Layer [ISOLATED]
 └── celestia-light-3: 172.22.0.103
 ```
 
-## Validator Node Structure (Mermaid Diagram)
-
-```mermaid
-graph TD
-    Root["Validator Node N<br/>engram-node0N.yml"]
-    
-    subgraph EngNet["engram-net 172.20.0.x"]
-        SN["stratium-node-N<br/>172.20.0.(100+N*10)<br/>Image: Local Build<br/>RPC:26657 REST:1317<br/>Prometheus:26660"]
-        VS["vigilante-submitter-N<br/>172.20.0.(101+N*10)<br/>Image: babylonlabs/babylond"]
-        VR["vigilante-reporter-N<br/>172.20.0.(102+N*10)<br/>Image: babylonlabs/babylond"]
-        VM["checkpointing-monitor-N<br/>172.20.0.(103+N*10)<br/>Image: babylonlabs/babylond"]
-        CL["celestia-light-N<br/>172.20.0.(104+N*10)<br/>Image: ghcr.io/celestiaorg<br/>RPC:26658"]
-    end
-    
-    subgraph BitNet["bitcoin-net 172.21.0.x<br/>ISOLATED NETWORK"]
-        VSB["vigilante-submitter-N<br/>172.21.0.(100+N*10)<br/>Shared with Bitcoin"]
-        VRB["vigilante-reporter-N<br/>172.21.0.(101+N*10)<br/>Shared with Bitcoin"]
-        VMB["checkpointing-monitor-N<br/>172.21.0.(102+N*10)<br/>Shared with Bitcoin"]
-        BTC["bitcoin-node-01<br/>172.21.0.10<br/>RPC:18443 ZMQ:28332/28333"]
-    end
-    
-    subgraph CelNet["celestia-net 172.22.0.x<br/>ISOLATED NETWORK"]
-        CLB["celestia-light-N<br/>172.22.0.(100+N)<br/>DA Layer Connection"]
-        CA["celestia-app<br/>172.22.0.10<br/>RPC:26657"]
-    end
-    
-    Root --> SN
-    SN -->|depends_on healthy| VS
-    SN -->|depends_on healthy| VR
-    SN -->|depends_on healthy| VM
-    SN -->|depends_on healthy| CL
-    
-    VS -->|network| VSB
-    VR -->|network| VRB
-    VM -->|network| VMB
-    
-    VSB -->|RPC call| BTC
-    VRB -->|RPC call| BTC
-    VMB -->|RPC call| BTC
-    
-    CL -->|network| CLB
-    CLB -->|DA retrieval| CA
-    
-    style EngNet fill:#c8e6c9,stroke:#388e3c,stroke-width:2px
-    style BitNet fill:#fff3e0,stroke:#f57c00,stroke-width:2px
-    style CelNet fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
-    style SN fill:#a5d6a7,stroke:#2e7d32
-    style VS fill:#a5d6a7,stroke:#2e7d32
-    style VR fill:#a5d6a7,stroke:#2e7d32
-    style VM fill:#a5d6a7,stroke:#2e7d32
-    style CL fill:#a5d6a7,stroke:#2e7d32
-```
-
-## Port Allocation
+### Port Allocation
 
 Each validator uses offset ports to avoid conflicts:
 
@@ -252,4 +70,75 @@ Bitcoin Network (isolated, not exposed):
 ├── bitcoin-node-01 RPC: 18443
 ├── ZMQ Raw Block:       28332
 └── ZMQ Raw Tx:          28333
+```
+
+## Draft Proposal
+
+Here is the concise summary of the Engram Protocol's modular architecture and Finite State Machine (FSM) design, written in professional English without icons.
+
+# Engram Protocol: Sovereign FSM and Modular Architecture
+
+## 1. The Tripartite Sensor Architecture
+To achieve external state objectivity without cluttering the consensus engine, Engram divides its sensing mechanisms into three distinct layers:
+
+* **External Infrastructure (Docker Containers):** The `celestia-light-client` and `vigilante-reporter` act as network interfaces. They perform Data Availability Sampling (DAS) and query Bitcoin RPCs to fetch raw cryptographic proofs. They do not compute blockchain logic.
+* **Application Layer (`x/` Modules):** The `x/da` and `x/vigilante` modules act as cryptographic validators. They receive raw proofs, verify Ed25519 signatures, Merkle paths, and Bitcoin SPV proofs. They guarantee mathematical correctness and update the internal KVStore.
+* **Consensus Core (Sensors via ABCI++):** The DA Sensor and Settlement Sensor are embedded directly into the custom CometBFT core. They enforce that no block is voted upon unless it contains valid external proofs, blocking malicious data before the consensus phase begins.
+
+## 2. ABCI++ Vote Extensions Integration
+The system achieves consensus on external events (Time-Mismatch resolution) using ABCI++ Vote Extensions:
+* **ExtendVote:** Before sending a Pre-commit, each validator queries the external containers and attaches the latest valid DA Proof and Bitcoin Proof to their vote payload.
+* **VerifyVoteExtension:** Upon receiving a vote, validators route the payload to `x/da` and `x/vigilante` for cryptographic verification. Invalid proofs result in immediate vote rejection.
+* **PrepareProposal:** The block proposer aggregates these validated extensions, establishing a globally agreed-upon `H_anchored` and `H_submitted` for the entire network.
+
+## 3. Finite State Machine and Circuit Breaker
+The `x/sovereignty` module governs the network's lifecycle to prevent split-brain scenarios and handle L1 latency. It calculates state transitions based on three variables:
+* `H_local`: Current block height of the Engram network.
+* `H_submitted`: Highest Engram block submitted to the Bitcoin mempool.
+* `H_anchored`: Highest Engram block finalized (6 blocks deep) on Bitcoin.
+
+**State Transitions:**
+* **ANCHORED:** Normal operation. System is fully operational with maximum throughput.
+* **SUSPICIOUS:** Triggered when `(H_local - H_submitted) > Threshold_1`. Indicates internal relayer failure or L1 mempool congestion. The Circuit Breaker activates, halting high-value transactions and bridging while maintaining local liveness.
+* **SOVEREIGN:** Triggered when `(H_submitted - H_anchored) > Threshold_2` (e.g., 6 hours) or Celestia DAS fails completely. The network severs external dependencies, ignores VoteExtension requirements, and relies purely on local PoS consensus to survive extreme L1/DA outages. Re-anchoring occurs via ZK-Proofs once the L1 connection is restored.
+
+---
+
+## Architecture Flow Diagram
+
+```mermaid
+graph TD
+    classDef external fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
+    classDef core fill:#fff3e0,stroke:#e65100,stroke-width:2px;
+    classDef app fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px;
+    classDef fsm fill:#f3e5f5,stroke:#4a148c,stroke-width:2px;
+
+    subgraph External Infrastructure
+        C[Celestia P2P] --> CLC[Celestia Light Client]
+        B[Bitcoin P2P] --> VSR[Vigilante Submitter/Reporter]
+    end
+
+    subgraph Consensus Core
+        CLC -->|Raw Inclusion Proof| VE[Vote Extension: \n DA & Settlement Sensors]
+        VSR -->|Raw BTC Header| VE
+    end
+
+    subgraph Application Layer
+        VE -->|ABCI++ VerifyVote| XDA[x/da Module \n Cryptographic Verification]
+        VE -->|ABCI++ VerifyVote| XVIG[x/vigilante Module \n SPV Verification]
+
+        XDA -->|DA Status| XSOV[x/sovereignty Module \n FSM Engine]
+        XVIG -->|H_submitted, H_anchored| XSOV
+    end
+
+    subgraph FSM States
+        XSOV --> S1((ANCHORED))
+        XSOV --> S2((SUSPICIOUS))
+        XSOV --> S3((SOVEREIGN))
+    end
+
+    class CLC,VSR external;
+    class VE core;
+    class XDA,XVIG app;
+    class XSOV,S1,S2,S3 fsm;
 ```
