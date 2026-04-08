@@ -13,6 +13,7 @@ THRESHOLD_SUSPICIOUS = 100
 THRESHOLD_SOVEREIGN = 500
 
 PROMETHEUS_URL = 'http://localhost:9090/api/v1/query_range'
+COMPOSE_FILE = 'compose.yml'
 
 # ==========================================
 # 2. STANDARD ACADEMIC PLOT CONFIGURATION (IEEE/ACM)
@@ -65,34 +66,42 @@ def fetch_prometheus_metric(query: str, start_time: float, end_time: float, step
         return []
 
 # ==========================================
-# 4. CHAOS ENGINEERING TOOLS (NETWORK FAULT SIMULATION)
+# 4. CHAOS ENGINEERING AUTOMATION (VIA PUMBA PROFILES)
 # ==========================================
-def disconnect_container_from_network(container_name: str, network_name: str = 'engram_net'):
+def trigger_chaos_profile(profile_name: str):
     """
-    Simulate a network partition or Eclipse Attack scenario.
+    Kích hoạt một kịch bản lỗi mạng thông qua Pumba profile.
     """
-    print(f"[{time.strftime('%X')}] Disconnecting {container_name} from network {network_name}...")
-    cmd = f"docker network disconnect {network_name} {container_name}"
-    subprocess.run(cmd, shell=True, check=False, capture_output=True)
+    print(f"[{time.strftime('%X')}] Kích hoạt kịch bản hỗn loạn (Chaos): {profile_name}...")
+    cmd = ["docker-compose", "-f", COMPOSE_FILE, "--profile", profile_name, "up", "-d"]
+    subprocess.run(cmd, check=True)
 
-def reconnect_container_to_network(container_name: str, network_name: str = 'engram_net'):
+def stop_chaos_profile(profile_name: str):
     """
-    Restore network connection to evaluate Re-anchoring and Recovery Time.
+    Dừng kịch bản lỗi mạng, khôi phục hệ thống về trạng thái hoàn hảo 0ms.
     """
-    print(f"[{time.strftime('%X')}] Reconnecting {container_name} to network {network_name}...")
-    cmd = f"docker network connect {network_name} {container_name}"
-    subprocess.run(cmd, shell=True, check=False, capture_output=True)
+    print(f"[{time.strftime('%X')}] Dừng kịch bản {profile_name}, khôi phục mạng lưới...")
+    cmd = ["docker-compose", "-f", COMPOSE_FILE, "--profile", profile_name, "stop"]
+    subprocess.run(cmd, check=True)
 
-def simulate_network_delay(container_name: str, delay_ms: int = 500, jitter_ms: int = 50):
-    """
-    Inject random delay (Jitter) using Linux NetEm (tc).
-    Used to simulate increased DA Latency (T_DA).
-    """
-    print(f"[{time.strftime('%X')}] Injecting {delay_ms}ms delay (±{jitter_ms}ms) into {container_name}...")
-    cmd = f"docker exec --privileged {container_name} tc qdisc add dev eth0 root netem delay {delay_ms}ms {jitter_ms}ms"
-    subprocess.run(cmd, shell=True, check=False, capture_output=True)
+# --- High-level semantic wrappers for specific test scripts ---
 
-def remove_network_delay(container_name: str):
-    """Remove injected delay from the container."""
-    cmd = f"docker exec --privileged {container_name} tc qdisc del dev eth0 root"
-    subprocess.run(cmd, shell=True, check=False, capture_output=True)
+def simulate_eclipse_attack():
+    """Cô lập hoàn toàn Node 01 khỏi mạng lưới."""
+    trigger_chaos_profile("chaos-eclipse")
+
+def recover_from_eclipse_attack():
+    """Khôi phục Node 01 để đánh giá quá trình Re-anchoring."""
+    stop_chaos_profile("chaos-eclipse")
+
+def simulate_network_latency():
+    """Tăng độ trễ mạng (100ms) để đánh giá độ trễ đồng thuận."""
+    trigger_chaos_profile("chaos-delay")
+
+def stop_network_latency():
+    """Khôi phục độ trễ về 0ms."""
+    stop_chaos_profile("chaos-delay")
+
+def simulate_node_crash():
+    """Sập nguồn đột ngột Node 04 (Crash Fault)."""
+    trigger_chaos_profile("chaos-crash")

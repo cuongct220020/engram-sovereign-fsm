@@ -36,3 +36,16 @@ venv/
 
 spec/tla2tools.jar
 states/
+
+# Noir execution artifacts
+target/
+proofs/
+
+# Private inputs
+Prover.toml
+
+# Verifier inputs (Optional to ignore, but usually not needed)
+Verifier.toml
+
+
+data/

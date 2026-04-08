@@ -1,137 +1,120 @@
-name: Engram-app Chain
+name: engram-validator-cluster
+
+include:
+  - ./docker/monitoring-services.yml
+  - ./docker/bitcoin-regtest-cluster.yml
+  - ./docker/celestia-local-cluster.yml
+  - ./docker/engram-validator-node01.yml
+  - ./docker/engram-validator-node02.yml
+  - ./docker/engram-validator-node03.yml
+  - ./docker/engram-validator-node04.yml
 
 services:
-  node0:
-  build: 
-    context: .
-    dockerfile: Dockerfile
-  container_name: engram_node0
-  networks:
-    engram-net:
-      ipv4_address: 172.20.0.10
-  volumes:
-      - ./build/testnet/node1:/root/.stratium
-  ports:
-    - "26657:26657" # Tendermint RPC (Dành cho script Python gửi lệnh)
-    - "1317:1317"   # Cosmos REST API
-    - "26660:26660" # Prometheus Metrics
-  environment:
-    - DA_ENDPOINT=http://celestia_mock:8080
-    - MINIMUM_GAS_PRICES=0strat
-  command: ["stratiumd", "start", "--prometheus"]
-  # develop:
-  #   watch:
-
-
-
+  # ==========================================
+  # CHAOS ENGINEERING PROFILES (PUMBA)
+  # ==========================================
   
-  prometheus:
-    image: prom/prometheus:latest
+  pumba-latency:
+    image: gaiaadm/pumba:latest
+    container_name: pumba-latency-injector
     volumes:
-      - ./scripts/telemetry/prometheus.yml:/etc/prometheus/prometheus.yml
-  
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
+      - /var/run/docker.sock:/var/run/docker.sock # Mount Docker socket for container manipulation
+    profiles:
+      - chaos-delay
+    # SCENARIO: Inject 100ms latency (±20ms jitter) for 5m to all stratium-node containers
+    command: 
+      - "netem"
+      - "--duration=5m"
+      - "delay"
+      - "--time=100"
+      - "--jitter=20"
+      - "re2:^stratium-node-.*"
 
-  bitcoin-node:
-    image: bitcoin/bitcoin:${HASH_TAG}
-    container_name: bitcoin_regtest_engram
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: '1.0'
-    ports:
-      - "127.0.0.1:18443:18443" # RPC: Chỉ cho phép localhost truy cập để bảo mật
-      - "18444:18444"           # P2P: Mở để các node bitcoin khác (nếu có) kết nối
-      - "28332:28332"           # ZMQ Block (Mới)
-      - "28333:28333"           # ZMQ Transaction (Mới)
-
-    environment:
-      - BITCOIN_DATA=/home/bitcoin/.bitcoin
-
+  pumba-loss:
+    image: gaiaadm/pumba:latest
+    container_name: pumba-loss-injector
     volumes:
-      # Mount dữ liệu ra máy host để không mất blockchain data khi restart
-      - ./bitcoin_data:/home/bitcoin/.bitcoin
-      # Mount file cấu hình riêng (nếu cần tùy chỉnh sâu)
-      # - ./bitcoin.conf:/home/bitcoin/.bitcoin/bitcoin.conf
+      - /var/run/docker.sock:/var/run/docker.sock
+    profiles:
+      - chaos-loss
+    # SCENARIO: Packet Loss - Drop 5% of network traffic on nodes 01 and 02 for 2m
+    command: 
+      - "netem"
+      - "--duration=2m"
+      - "loss"
+      - "--percent=5"
+      - "stratium-node-01"
+      - "stratium-node-02"
 
-    command:
-      - -regtest=1            # Chế độ thử nghiệm, tự tạo block
-      - -server=1             # Chấp nhận các lệnh RPC
-      - -txindex=1            # Quan trọng: Cho phép Vigilantes tra cứu mọi transaction ID
-      - -printtoconsole=1     # Đẩy log ra docker logs để dễ debug
-      - -rpcbind=0.0.0.0      # Lắng nghe RPC từ trong mạng docker
-      - -rpcallowip=0.0.0.0/0 # Cho phép các service khác trong compose gọi RPC
-      # Cấu hình xác thực (Nên đưa vào file .env)
-      - -rpcuser=${RPC_USER:-engram_admin}
-      - -rpcpassword=${RPC_PASSWORD:-secure_password_123}
-      - -fallbackfee=0.00001
-      - -maxtxfee=0.1
-      - -zmqpubrawblock=tcp://0.0.0.0:28332
-      - -zmqpubrawtx=tcp://0.0.0.0:28333
+  pumba-kill:
+    image: gaiaadm/pumba:latest
+    container_name: pumba-crash-injector
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    profiles:
+      - chaos-crash
+    # SCENARIO: Crash Fault - Forcefully terminate node 04 immediately
+    command: 
+      - "kill"
+      - "--signal=SIGKILL"
+      - "stratium-node-04"
 
-
-# # 1. Tạo ví mặc định cho Engram System
-# docker exec bitcoin_regtest_engram bitcoin-cli -regtest -rpcuser=engram_admin -rpcpassword=secure_password_123 createwallet "engram_vault"
-
-# # 2. Lấy một địa chỉ mới
-# ADDRESS=$(docker exec bitcoin_regtest_engram bitcoin-cli -regtest -rpcuser=engram_admin -rpcpassword=secure_password_123 getnewaddress)
-
-# # 3. Generate 101 blocks để bắt đầu có số dư (mô phỏng coinbase maturity)
-# docker exec bitcoin_regtest_engram bitcoin-cli -regtest -rpcuser=engram_admin -rpcpassword=secure_password_123 generatetoaddress 101 $ADDRESS
-
-# # 4. Kiểm tra số dư
-# docker exec bitcoin_regtest_engram bitcoin-cli -regtest -rpcuser=engram_admin -rpcpassword=secure_password_123 getbalance
-
-# pip instal pyzmq
-# import zmq
-# import binascii
-
-# def start_monitor():
-#     context = zmq.Context()
-#     # Tạo socket kiểu SUB (Subscriber)
-#     subscriber = context.socket(zmq.SUB)
-  
-#     # Kết nối tới cổng ZMQ Block của Bitcoin Node
-#     subscriber.connect("tcp://localhost:28332")
-  
-#     # Đăng ký nhận tin nhắn liên quan đến "rawblock"
-#     subscriber.setsockopt_string(zmq.SUBSCRIBE, "rawblock")
-
-#     print("Vigilante Monitor đang lắng nghe Bitcoin Regtest...")
-
-#     try:
-#         while True:
-#             # Nhận tin nhắn (gồm 2 phần: topic và body)
-#             topic, body, seq = subscriber.recv_multipart()
-          
-#             if topic == b"rawblock":
-#                 # Chuyển đổi dữ liệu binary sang hex để đọc
-#                 block_hash = binascii.hexlify(body).decode('utf-8')
-#                 print(f" New Block Detected! Hash: {block_hash[:64]}...")
-              
-#                 # Tại đây, bạn có thể gọi RPC để lấy chi tiết block 
-#                 # và cập nhật trạng thái cho Engram App-chain.
-              
-#     except KeyboardInterrupt:
-#         print("Dừng Monitor.")
-#     finally:
-#         subscriber.close()
-#         context.term()
-
-# if __name__ == "__main__":
-#     start_monitor()
+  pumba-eclipse:
+    image: gaiaadm/pumba:latest
+    container_name: pumba-eclipse-injector
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    profiles:
+      - chaos-eclipse
+    # SCENARIO: Eclipse Attack - Isolate node 01 by dropping 100% of its traffic for 3m
+    command: 
+      - "netem"
+      - "--duration=3m"
+      - "loss"
+      - "--percent=100"
+      - "stratium-node-01"
 
 networks:
+  # Main validator network: All validators and monitoring tools communicate here
   engram-net:
+    name: engram-net
     driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: "br-engram"
+      com.docker.network.driver.mtu: "1500"
     ipam:
       config:
         - subnet: 172.20.0.0/24
           gateway: 172.20.0.1
+
+  # Bitcoin network: Isolated environment for Bitcoin RPC and vigilante services
+  bitcoin-net:
+    name: bitcoin-net
+    driver: bridge
     driver_opts:
-      com.docker.network.bridge.name: "br-engram"
+      com.docker.network.bridge.name: "br-bitcoin"
+      com.docker.network.driver.mtu: "1500"
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
+          gateway: 172.21.0.1
+
+  # Celestia network: Isolated environment for Celestia DA layer
+  celestia-net:
+    name: celestia-net
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: "br-celestia"
+      com.docker.network.driver.mtu: "1500"
+    ipam:
+      config:
+        - subnet: 172.22.0.0/24
+          gateway: 172.22.0.1
+
+volumes:
+  prometheus-data:
+    name: prometheus-data
+    driver: local
+  grafana-data:
+    name: grafana-data
+    driver: local
