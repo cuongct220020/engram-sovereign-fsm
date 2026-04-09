@@ -102,7 +102,6 @@ The `x/sovereignty` module governs the network's lifecycle to prevent split-brai
 * **SUSPICIOUS:** Triggered when `(H_local - H_submitted) > Threshold_1`. Indicates internal relayer failure or L1 mempool congestion. The Circuit Breaker activates, halting high-value transactions and bridging while maintaining local liveness.
 * **SOVEREIGN:** Triggered when `(H_submitted - H_anchored) > Threshold_2` (e.g., 6 hours) or Celestia DAS fails completely. The network severs external dependencies, ignores VoteExtension requirements, and relies purely on local PoS consensus to survive extreme L1/DA outages. Re-anchoring occurs via ZK-Proofs once the L1 connection is restored.
 
----
 
 ## Architecture Flow Diagram
 
