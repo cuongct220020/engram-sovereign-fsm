@@ -45,8 +45,8 @@ $$
 \text{IsWarningCondition} \triangleq\;&
 (T_\text{Suspicious} \leq \Delta H_\text{BTC} < T_\textbf{Sovereign}) \\
 &\lor (\Delta H_\text{DA} \geq T_\text{DA}) \\
-&\lor \text{DAS\_failed} \\
-&\lor (P < P_\text{min})
+&\lor \text{IsDASFailed} \\
+&\lor (P < P_{min})
 \end{aligned}
 $$ 
 
@@ -61,7 +61,7 @@ $$
 \text{IsHealthyCondition} \triangleq\;&
 \Delta H_\text{BTC} < T_1 \\
 &\land \Delta H_\text{DA} < T_\text{DA} \\
-&\land \lnot \text{DAS\_failed} \\
+&\land \lnot \text{IsDASFailed} \\
 &\land P \geq P_\text{min}
 \end{aligned}
 $$ 
@@ -92,11 +92,13 @@ $$\Delta H_\text{DA} = H_\text{local} - H_\text{verified}$$
 Let $s_i \in \{\text{TRUE}, \text{FALSE}\}$ denote the outcome of the $i$-th sampling check across $N$ samples.
 
 - Availability confirmed:
+
 $$
 \text{IsAvailable}(B) \triangleq \bigwedge_{i=1}^{N} s_i
 $$
 
 - Failure detected:
+
 $$
 \text{Failed}(B) \triangleq \exists i \in \{1, \dots, N\} \;\text{s.t.}\; \neg s_i
 $$
@@ -162,7 +164,7 @@ $$
 \begin{aligned}
 \text{RecoveringProgress} \triangleq\;& state = \text{RECOVERING} \\
 &\land \text{IsHealthyCondition} \\
-&\land safe\_blocks < \text{HYSTERESIS\_WAIT}
+&\land safe\_blocks < \text{HysteresisWait}
 \end{aligned}
 $$
 
@@ -172,7 +174,7 @@ $$
 \begin{aligned}
 \text{RecoveringToAnchored} \triangleq\;& state = \text{RECOVERING} \\
 &\land \text{IsHealthyCondition} \\
-&\land safe\_blocks = \text{HYSTERESIS\_WAIT} \\
+&\land safe\_blocks = \text{HysteresisWait} \\
 &\land reanchoring\_proof\_valid = \text{TRUE}
 \end{aligned}
 $$
@@ -278,24 +280,24 @@ Let $H_\text{wait}$ = `HYSTERESIS_WAIT` and $\pi_\text{RA}$ = `reanchoring_proof
 
 TLC verified three safety invariants (zero violations):
 
-- **S1 — Circuit Breaker:** Withdrawals locked iff in a fallback state.
+- **S1 — Circuit Breaker:** Withdrawals are locked if in a fallback state.
 
 $$
-\text{withdraw\_locked} \Leftrightarrow
+\text{withdraw locked} \Leftrightarrow
 state \in \{\text{SOVEREIGN}, \text{RECOVERING}\}
 $$
 
 - **S2 — Deadlock Freedom:** FSM always has an enabled transition.
 
-$$\square\;\text{ENABLED}(\text{Next})$$ 
+$$\square \text{ENABLED}(\text{Next})$$ 
 
-- **S3 — Hysteresis Integrity:** RECOVERING to ANCHORED requires full hysteresis wait and valid proof.
+- **S3 — Hysteresis Integrity:** RECOVERING to ANCHORED requires a full hysteresis wait and valid proof.
 
 $$ 
-\square\;\Big[
-  \big(state = \text{RECOVERING} \;\land\; state' = \text{ANCHORED}\big)
+\square \Big[
+  \big(state = \text{RECOVERING} \land state' = \text{ANCHORED}\big)
   \implies
-  \big(safe\_blocks = H_\text{wait} \;\land\; \pi_\text{RA} = \top\big)
+  \big(safe_{blocks} = H_\text{wait} \land \pi_\text{RA} = \top\big)
 \Big]
 $$ 
 
@@ -304,24 +306,27 @@ $$
 TLC verified three temporal liveness properties under weak fairness:
 
 - **L1 — Circuit Breaker Liveness:** Critical condition eventually reaches SOVEREIGN.
+
 $$ 
 \text{IsCriticalCondition}
- \;\leadsto\;
- \big(state = \text{SOVEREIGN} \;\lor\; \lnot\,\text{IsCriticalCondition}\big)
+ \leadsto
+ \big(state = \text{SOVEREIGN} \lor \lnot\text{IsCriticalCondition}\big)
 $$ 
 
 - **L2 — Recovery Attempt:** Healthy SOVEREIGN state eventually initiates recovery.
+
 $$ 
-\big(state = \text{SOVEREIGN} \;\land\; \text{IsHealthyCondition}\big)
- \;\leadsto\;
- \big(state = \text{RECOVERING} \;\lor\; \lnot\,\text{IsHealthyCondition}\big)
+\big(state = \text{SOVEREIGN} \land \text{IsHealthyCondition}\big)
+ \leadsto
+ \big(state = \text{RECOVERING} \lor \lnot\text{IsHealthyCondition}\big)
 $$ 
 
-- **L3 — Complete Recovery:** Valid proof in healthy RECOVERING state eventually produces ANCHORED.
+- **L3 — Complete Recovery:** Valid proof in a healthy RECOVERING state eventually produces ANCHORED.
+
 $$ 
-\big(state = \text{RECOVERING} \;\land\; \pi_\text{RA} = \top \;\land\; \text{IsHealthyCondition}\big)
- \;\leadsto\;
- \Big(state = \text{ANCHORED} \;\lor\; \lnot\,\text{IsHealthyCondition} \;\lor\; \pi_\text{RA} \neq \top\Big)
+\big(state = \text{RECOVERING} \land\ \pi_\text{RA} = \top \land\ \text{IsHealthyCondition}\big)
+ \leadsto
+ \Big(state = \text{ANCHORED} \lor \lnot\text{IsHealthyCondition} \lor \pi_\text{RA} \neq \top\Big)
 $$ 
 
 ### 5.3 State Behavior Under Partition
