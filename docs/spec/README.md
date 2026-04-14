@@ -44,7 +44,7 @@ Four continuously monitored sensor variables drive the FSM (from `VARIABLES` in 
 | `is_das_failed` | `BOOLEAN` | True if any Data Availability Sampling check failed |
 | `peer_count` | `0..MIN_PEERS * 2` | Number of active P2P peers visible |
 
-### 2.2 Measurement Formulas
+### 2.2 Measurement Formulas for Network Sensors
 
 #### **Bitcoin Finality Gap:** 
 Referring to the monitoring formula and Liveness Attack assessment of the Bitcoin network from the [Vigilante Checkpointing Monitor](https://docs.babylonlabs.io/guides/overview/babylon_genesis/architecture/vigilantes/monitor/), the formula is simplified for the Finality Gap Sensor as follows:
@@ -79,41 +79,42 @@ $$
 \text{Failed}(B) \triangleq \exists i \in \{1, \dots, N\} \;\text{s.t.}\; \neg s_i
 $$
 
-> **IMPORTANT NOTE:** Each Engram validator node (celestia light client) performs 15 samples per block, sufficient to confirm with greater than 99% probability that the full block data is published.
+> **IMPORTANT NOTE:** Each Engram validator node (Celestia light client) performs 15 samples per block, sufficient to confirm with greater than 99% probability that the full block data is published.
 
-### 2.3 Derived Conditions
+### 2.3 State Transition Conditions
 
 Let $P$ = `peer_count` and $P_\text{min}$ = `MIN_PEERS`. Three composite conditions drive state transitions:
 
 - **Warning condition** (triggers ANCHORED to SUSPICIOUS):
 
-    $$ 
-    \begin{aligned}
-    \text{IsWarningCondition} \triangleq\;&
-    (T_\text{Suspicious} \leq \Delta H_\text{BTC} < T_\text{Sovereign}) \\
-    &\lor (\Delta H_\text{DA} \geq T_\text{DA}) \\
-    &\lor \text{IsDASFailed} \\
-    &\lor (P < P_{min})
-    \end{aligned}
-    $$ 
+ $$ 
+ \begin{aligned}
+ \text{IsWarningCondition} \triangleq\;&
+ (T_\text{Suspicious} \leq \Delta H_\text{BTC} < T_\text{Sovereign}) \\
+ &\lor (\Delta H_\text{DA} \geq T_\text{DA}) \\
+ &\lor \text{IsDASFailed} \\
+ &\lor (P < P_{min})
+ \end{aligned}
+ $$ 
+
 
 - **Critical condition** (triggers SOVEREIGN):
 
-    $$\text{IsCriticalCondition} \triangleq \Delta H_\text{BTC} \geq T_\text{Sovereign}$$ 
+$$\text{IsCriticalCondition} \triangleq \Delta H_\text{BTC} \geq T_\text{Sovereign}$$ 
 
 - **Healthy condition** (prerequisite for recovery):
 
-    $$ 
-    \begin{aligned}
-    \text{IsHealthyCondition} \triangleq\;&
-    \Delta H_\text{BTC} < T_\text{Suspicious} \\
-    &\land \Delta H_\text{DA} < T_\text{DA} \\
-    &\land \lnot \text{IsDASFailed} \\
-    &\land P \geq P_\text{min}
-    \end{aligned}
-    $$ 
+ $$ 
+ \begin{aligned}
+ \text{IsHealthyCondition} \triangleq\;&
+ \Delta H_\text{BTC} < T_\text{Suspicious} \\
+ &\land \Delta H_\text{DA} < T_\text{DA} \\
+ &\land \lnot \text{IsDASFailed} \\
+ &\land P \geq P_\text{min}
+ \end{aligned}
+ $$ 
 
-    > $P \geq P_\text{min}$ prevents isolated nodes from triggering recovery (Eclipse Attack defense).
+ > $P \geq P_\text{min}$ prevents isolated nodes from triggering recovery (Eclipse Attack defense).
 
 
 ## 3. State Transitions
@@ -313,7 +314,7 @@ $$
 \square \Big[
   \big(state = \text{RECOVERING} \land state' = \text{ANCHORED}\big)
   \implies
-  \big(safe_{blocks} = H_\text{wait} \land \pi_\text{RA} = \top\big)
+  \big(safe_{blocks} = H_\text{wait} \land \pi_\text{RA} = \text{TRUE}\big)
 \Big]
 $$ 
 
