@@ -2,18 +2,28 @@
 
 This directory contains the formal mathematical specification of the **Adaptive Consensus Finite State Machine (FSM)** for the Engram Protocol, written in **TLA+** and verified with **TLC** to prove correctness during network partitions.
 
-
-
-
 ## 1. Overview
-
-Engram is a modular blockchain decoupled into execution, DA (Celestia), and settlement (Bitcoin/Babylon). To mitigate liveness risks from external layer failures, the Adaptive Consensus FSM autonomously switches consensus modes while preserving safety.
+ 
+Engram is a modular blockchain decoupled into execution, DA (Celestia), and settlement (Bitcoin/Babylon). This architecture introduces a structural liveness risk: if any external layer becomes unavailable, a naive implementation would halt entirely. The Adaptive Consensus FSM mitigates this by autonomously switching consensus modes while preserving provable safety throughout every transition.
 
 The FSM governs four states:
-- **ANCHORED**: Normal operation (Bitcoin-secured, DA confirmed).
-- **SUSPICIOUS**: Degraded mode. Warning conditions restrict high-risk transactions.
-- **SOVEREIGN**: Fallback mode. Critical partition activates Local PoS and halts cross-chain withdrawals (Circuit Breaker).
-- **RECOVERING**: Re-anchoring mode. Connectivity restored; aggregates Sovereign transitions via ZK-Proof to restore full security.
+ 
+- **ANCHORED**: Normal operation. Bitcoin-secured via Babylon checkpointing; DA confirmed via Celestia/Blobstream.
+- **SUSPICIOUS**: Early warning. Warning conditions detected — restricts high-risk transactions and prioritizes critical operations.
+- **SOVEREIGN**: Active partition. Local PoS activated; Circuit Breaker halts all cross-chain withdrawals.
+- **RECOVERING**: Resolution. Connectivity restored; aggregates all Sovereign transitions into a single recursive ZK-Proof to re-anchor to Bitcoin.
+ 
+### State Comparison Summary
+ 
+| | ANCHORED | SUSPICIOUS | SOVEREIGN | RECOVERING |
+|---|---|---|---|---|
+| Incident phase | Normal | Early warning | Active partition | Resolution |
+| Security basis | Bitcoin | Bitcoin (degraded) | Local PoS | Local PoS + pending proof |
+| Withdrawals | Permitted | Permitted | Locked | Locked |
+| Throughput | Full | Restricted | Full | Full |
+| Finality latency | ~10–60 mins | Moderate | ~2 Seconds | ~2 Seconds |
+| Liveness | Bitcoin + Celestia | Partial | Self-sovereign | Self-sovereign |
+ 
 
 
 ## 2. System Model
@@ -30,45 +40,11 @@ Four continuously monitored sensor variables drive the FSM (from `VARIABLES` in 
 | Variable | Type | Description |
 |---|---|---|
 | `btc_gap` | `0..MAX_BTC_GAP` | Block height diff since last confirmed Bitcoin checkpoint |
-| `da_gap` | `0..MAX_DA_GAP` | Block height diff since last verified DA receipt |
+| `da_gap` | `0..MAX_DA_GAP` | Block height diff since last verified DA commitment receipt |
 | `is_das_failed` | `BOOLEAN` | True if any Data Availability Sampling check failed |
 | `peer_count` | `0..MIN_PEERS * 2` | Number of active P2P peers visible |
 
-### 2.2 Derived Conditions
-
-Let $P$ = `peer_count` and $P_\text{min}$ = `MIN_PEERS`. Three composite conditions drive state transitions:
-
-**Warning condition** (triggers ANCHORED to SUSPICIOUS):
-
-$$ 
-\begin{aligned}
-\text{IsWarningCondition} \triangleq\;&
-(T_\text{Suspicious} \leq \Delta H_\text{BTC} < T_\textbf{Sovereign}) \\
-&\lor (\Delta H_\text{DA} \geq T_\text{DA}) \\
-&\lor \text{IsDASFailed} \\
-&\lor (P < P_{min})
-\end{aligned}
-$$ 
-
-**Critical condition** (triggers SOVEREIGN):
-
-$$\text{IsCriticalCondition} \triangleq \Delta H_\text{BTC} \geq T_\text{Sovereign}$$ 
-
-**Healthy condition** (prerequisite for recovery):
-
-$$ 
-\begin{aligned}
-\text{IsHealthyCondition} \triangleq\;&
-\Delta H_\text{BTC} < T_\text{Suspicious} \\
-&\land \Delta H_\text{DA} < T_\text{DA} \\
-&\land \lnot \text{IsDASFailed} \\
-&\land P \geq P_\text{min}
-\end{aligned}
-$$ 
-
-* $P \geq P_\text{min}$ prevents isolated nodes from triggering recovery (Eclipse Attack defense).*
-
-### 2.3 Measurement Formulas
+### 2.2 Measurement Formulas
 
 #### **Bitcoin Finality Gap:** 
 Referring to the monitoring formula and Liveness Attack assessment of the Bitcoin network from the [Vigilante Checkpointing Monitor](https://docs.babylonlabs.io/guides/overview/babylon_genesis/architecture/vigilantes/monitor/), the formula is simplified for the Finality Gap Sensor as follows:
@@ -85,7 +61,7 @@ $$\Delta H_\text{BTC} = H_\text{current} - \min(H_\text{submitted},\, H_\text{an
 $$\Delta H_\text{DA} = H_\text{local} - H_\text{verified}$$ 
 
 - $H_\text{local}$: The current block height of the Engram network.  
-- $H_\text{verified}$: The highest Engram block height that has received a valid Data Availability (DA) receipt from Celestia via Blobstream.
+- $H_\text{verified}$: The highest Engram block height that has received a valid Data Availability commitment (DA commitment) receipt from Celestia via Blobstream.
 
 #### **Data Availability Sampling:**
 
@@ -103,7 +79,41 @@ $$
 \text{Failed}(B) \triangleq \exists i \in \{1, \dots, N\} \;\text{s.t.}\; \neg s_i
 $$
 
-> **IMPORTANT NOTE:** Each validator node performs 15 samples per block, sufficient to confirm with greater than 99% probability that the full block data is published.*
+> **IMPORTANT NOTE:** Each Engram validator node (celestia light client) performs 15 samples per block, sufficient to confirm with greater than 99% probability that the full block data is published.
+
+### 2.3 Derived Conditions
+
+Let $P$ = `peer_count` and $P_\text{min}$ = `MIN_PEERS`. Three composite conditions drive state transitions:
+
+- **Warning condition** (triggers ANCHORED to SUSPICIOUS):
+
+    $$ 
+    \begin{aligned}
+    \text{IsWarningCondition} \triangleq\;&
+    (T_\text{Suspicious} \leq \Delta H_\text{BTC} < T_\text{Sovereign}) \\
+    &\lor (\Delta H_\text{DA} \geq T_\text{DA}) \\
+    &\lor \text{IsDASFailed} \\
+    &\lor (P < P_{min})
+    \end{aligned}
+    $$ 
+
+- **Critical condition** (triggers SOVEREIGN):
+
+    $$\text{IsCriticalCondition} \triangleq \Delta H_\text{BTC} \geq T_\text{Sovereign}$$ 
+
+- **Healthy condition** (prerequisite for recovery):
+
+    $$ 
+    \begin{aligned}
+    \text{IsHealthyCondition} \triangleq\;&
+    \Delta H_\text{BTC} < T_\text{Suspicious} \\
+    &\land \Delta H_\text{DA} < T_\text{DA} \\
+    &\land \lnot \text{IsDASFailed} \\
+    &\land P \geq P_\text{min}
+    \end{aligned}
+    $$ 
+
+    > $P \geq P_\text{min}$ prevents isolated nodes from triggering recovery (Eclipse Attack defense).
 
 
 ## 3. State Transitions
@@ -224,9 +234,15 @@ stateDiagram-v2
     }
 
     state RECOVERING {
+        direction TB
+
         [*] --> GeneratingZKProof
         GeneratingZKProof --> SubmittingProof : anchor to BTC
-        SubmittingProof --> SubmittingProof : Δ safe_blocks [safe_blocks < H_wait]
+
+        %% note right of SubmittingProof
+        %%     Repeat until:
+        %%     safe_blocks ≥ H_wait
+        %% end note
     }
 
     ANCHORED --> SUSPICIOUS : IsWarningCondition
@@ -237,7 +253,7 @@ stateDiagram-v2
 
     SOVEREIGN --> RECOVERING : IsHealthyCondition
 
-    RECOVERING --> ANCHORED   : IsHealthyCondition ∧ safe_blocks = H_wait ∧ π_RA = ⊤
+    RECOVERING --> ANCHORED   : IsHealthyCondition /\ safe_blocks = H_wait /\ π_RA = TRUE
     RECOVERING --> SUSPICIOUS : IsWarningCondition
     RECOVERING --> SOVEREIGN  : IsCriticalCondition
 ```
@@ -259,7 +275,7 @@ A single recursive SNARK aggregates all transitions, allowing $O(1)$ verificatio
 
 ## 4. Formal Specification Parameters
 
-Constants in `EngramFSM.cfg` used by TLC:
+Constants in `MC_EngramFSM.cfg` used by TLC:
 
 | Constant | Value | Meaning |
 |---|---|---|
@@ -324,32 +340,35 @@ $$
 - **L3 — Complete Recovery:** Valid proof in a healthy RECOVERING state eventually produces ANCHORED.
 
 $$ 
-\big(state = \text{RECOVERING} \land\ \pi_\text{RA} = \top \land\ \text{IsHealthyCondition}\big)
+\big(state = \text{RECOVERING} \land\ \pi_\text{RA} = \text{TRUE} \land\ \text{IsHealthyCondition}\big)
  \leadsto
- \Big(state = \text{ANCHORED} \lor \lnot\text{IsHealthyCondition} \lor \pi_\text{RA} \neq \top\Big)
+ \Big(state = \text{ANCHORED} \lor \lnot\text{IsHealthyCondition} \lor \pi_\text{RA} \neq \text{TRUE} \Big)
 $$ 
 
-### 5.3 State Behavior Under Partition
-
-| Property | ANCHORED | SUSPICIOUS | SOVEREIGN | RECOVERING |
-|---|---|---|---|---|
-| Security basis | Bitcoin | Bitcoin (degraded) | Local PoS | Local PoS + proof |
-| Finality latency | ~10–60 mins | Moderate | Seconds | Seconds |
-| Throughput | Full | Restricted | Full | Full |
-| Withdrawals | Permitted | Permitted | Locked | Locked |
-| Liveness dependency | Bitcoin + Celestia | Partial | Self-sovereign | Self-sovereign |
 
 ## 6. Verification Results
 
-TLC results (`EngramFSM.cfg` + `EngramFSM.tla`):
+TLC results (`MC_EngramFSM.cfg` + `MC_EngramFSM.tla`):
 
 ```
+cuongct090_04@MacBook-Air-cua-Cuong-CT spec % tlc -config EngramFSM.cfg EngramFSM.tla
+...
+Starting... (2026-04-13 15:36:16)
+Checking 3 branches of temporal properties for the complete state space with 42336 total distinct states at (2026-04-13 15:43:03)
+...
+Finished checking temporal properties in 25s at 2026-04-13 15:43:29
 Model checking completed. No error has been found.
-  28,467,199 states generated
-  14,112 distinct states found
-  0 states left on queue
+  Estimates of the probability that TLC did not check all reachable states
+  because two distinct states had the same fingerprint:
+  calculated (optimistic):  val = 2.2E-8
+  based on the actual fingerprints:  val = 2.5E-14
+28,467,199 states generated, 14,112 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 9.
+The average outdegree of the complete state graph is 0 (minimum is 0, the maximum 31 and the 95th percentile is 1).
+Finished in 07min 13s at (2026-04-13 15:43:29)
 ```
-*All 3 safety invariants and 3 liveness properties confirmed across the state space.*
+
+> All 3 safety invariants and 3 liveness properties confirmed across the state space.
 
 ## 7. How to Run Verification
 
@@ -362,13 +381,13 @@ Model checking completed. No error has been found.
 
 ```bash
 # Main FSM (safety + liveness)
-java -cp /path/to/tla2tools.jar tlc2.TLC -config EngramFSM.cfg EngramFSM.tla
+java -cp /path/to/tla2tools.jar tlc2.TLC -config MC_EngramFSM.cfg MC_EngramFSM.tla
 
-# Safety only
-java -cp /path/to/tla2tools.jar tlc2.TLC -config MC_Safety.cfg MC_Safety.tla
+# Consensus Safety only
+java -cp /path/to/tla2tools.jar tlc2.TLC -config MC_ConsensusSafety.cfg MC_ConsensusSafety.tla
 
-# Liveness only
-java -cp /path/to/tla2tools.jar tlc2.TLC -config MC_Liveness.cfg MC_Liveness.tla
+# Consensus Liveness only
+java -cp /path/to/tla2tools.jar tlc2.TLC -config MC_ConsensusLiveness.cfg MC_ConsensusLiveness.tla
 ```
 
 ### Using VS Code (TLA+ extension)
@@ -376,3 +395,56 @@ If you have the TLA+ extension installed in VS Code, you can run checks without 
 1. Open the `.tla` file (e.g., `MC_Safety.tla`).
 2. Open the Command Palette (`Cmd+Shift+P` on macOS, `Ctrl+Shift+P` on Linux).
 3. Select `TLA+: Check model with TLC`.
+
+
+## 8. Tendermint (CometBFT)
+```mermaid
+stateDiagram-v2
+    direction TB
+
+    [*] --> NewHeight
+
+    NewHeight --> NewRound: Start new block<br> h = h + 1, r = 0
+
+    NewRound --> Propose: Select proposer <br> (weighted round-robin by voting power)
+
+    Propose --> Prevote: Receive valid proposal <br> OR timeout propose expires
+
+    Prevote --> PrevoteBlock: Proposal valid <br> AND no lock conflict
+    Prevote --> PrevoteNil: Proposal invalid <br> OR locked on different block <br> OR no proposal (timeout)
+
+    PrevoteBlock --> Polka: Broadcast prevote(block) <br> Collect +2/3 prevotes
+    PrevoteNil --> NilPolka: Broadcast prevote(nil) <br> Collect +2/3 nil prevotes
+
+    Polka --> Precommit: Lock block <br> (update lockedBlock, lockedRound)
+    NilPolka --> Precommit: No lock <br> move forward
+
+    Precommit --> Commit: +2/3 precommits<br>for same block --> FINALIZE
+    Precommit --> NewRound: Timeout OR no consensus<br>increase round r++
+
+    Commit --> NewHeight: Apply block to state<br>move to next height
+
+    note right of Prevote
+        Prevote rules:
+        - Vote block if valid
+        - Respect existing lock
+        - Otherwise vote NIL
+    end note
+
+    note right of Precommit
+        Locking:
+        - Lock on Polka (+2/3 prevotes)
+        - Unlock if new Polka in later round
+    end note
+
+    note left of Propose
+        Proposer may fail:
+        - Offline / slow / malicious
+        → handled by timeout
+    end note
+
+    note left of NewRound
+        Round increases until:
+        a valid proposer appears
+    end note
+```
