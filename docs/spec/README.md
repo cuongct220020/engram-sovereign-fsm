@@ -401,24 +401,25 @@ If you have the TLA+ extension installed in VS Code, you can run checks without 
 ## Layered Formal Specification
 
 ```mermaid
-flowchart BT
-    L5["Layer 5: Network (P2P Network)"]
-    L4["Layer 4: Voting (Tendermint)"]
-    L3["Layer 3: Server (QC/TC Certificates)"]
-    L2["Layer 2: Consensus (AdoB/LiDO Core)"]
-    L1["Layer 1: FSM (Global Circuit Breaker)"]
+graph TD
+    subgraph Tang_1 ["Tầng 1: Lõi Trừu tượng"]
+        C["EngramConsensus"]
+    end
 
-    %% Bottom-up refined data flow
-    L5 ==>|Raw physical messages| L4
-    L4 ==>|Supermajority reached| L3
-    L3 ==>|Package certificates| L2
-    L2 ==>|Update state| L1
+    subgraph Tang_2 ["Tang 2: Tầng Dịch & Điều phối"]
+        S["EngramServer"]
+    end
 
-    %% Top-down coordination flow
-    L1 -.->|Enforce quorum rules| L2
-    L2 -.->|Pacemaker control| L3
-    L3 -.->|Listen| L4
-    L4 -.->|Send / Receive| L5
+    subgraph Tang_3 ["Tầng 3: Thực thi & Ngoại biên"]
+        FSM["EngramFSM<br>Cảm biến trạng thái"]
+        TM["EngramTendermint<br>Lõi đồng thuận BFT"]
+    end
+
+    C <-- "Ánh xạ chứng chỉ (QC/TC)" --> S
+    S --> FSM
+    S --> TM
+
+    FSM -. "Tích hợp sắp tới: Nhúng btc_gap/da_gap vào Proposal" .-> TM
 ```
 
 

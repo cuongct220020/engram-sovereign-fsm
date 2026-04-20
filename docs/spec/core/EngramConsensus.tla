@@ -1,36 +1,36 @@
 ----------------------- MODULE EngramConsensus -----------------------
 EXTENDS Naturals, FiniteSets
 
-(********************* GIAO DIỆN & HẰNG SỐ ************************)
+(********************* INTERFACE & CONSTANTS ************************)
 CONSTANTS Nodes, ResetTime, Method, Stake, TotalStake
 
-(********************* BIẾN CỦA TẦNG CONSENSUS (TẦNG 2) ***********)
+(********************* CONSENSUS LAYER VARIABLES (LAYER 2) ***********)
 VARIABLES 
-    tree,                 \* Cây bộ đệm (AdoB
-    local_times,          \* Thời gian logic của từng node
-    round,                \* Vòng đồng thuận hiện tại
-    rem_time,             \* Thời gian đếm ngược
-    fsm_state             \* TRỪU TƯỢNG HÓA: Chỉ cần 1 biến môi trường
+    tree,                 \* Buffer tree (AdoB)
+    local_times,          \* Logical time of each node
+    round,                \* Current consensus round
+    rem_time,             \* Countdown timer
+    fsm_state             \* ABSTRACTION: Only 1 environment variable is needed
 
 vars == <<tree, local_times, round, rem_time, fsm_state>>
 
-(********************* TỐI ƯU QUORUM (MEMOIZATION) ****************)
+(********************* QUORUM OPTIMIZATION (MEMOIZATION) ****************)
 RECURSIVE SumStakeOp(_)
 SumStakeOp(Q) == IF Q = {} THEN 0 ELSE LET n == CHOOSE x \in Q : TRUE IN Stake[n] + SumStakeOp(Q \ {n})
 
 SumStake[Q \in SUBSET Nodes] == SumStakeOp(Q)
 
-\* Tính sẵn một lần tập hợp các Quorum hợp lệ
+\* Precompute the set of valid Quorums once
 ValidQuorums == {q \in SUBSET Nodes : SumStake[q] * 3 > TotalStake * 2}
 
 isSQuorum(Q) == Q \in ValidQuorums
 
-(********************* KHỞI TẠO ***********************************)
+(********************* INITIALIZATION ***********************************) 
 Init == 
-    /\ tree = {}
-    /\ local_times = [n \in Nodes |-> 0]
-    /\ round = 1
-    /\ rem_time = ResetTime
+    /\ tree = {} 
+    /\ local_times = [n \in Nodes |-> 0] 
+    /\ round = 0        
+    /\ rem_time = 0
     /\ fsm_state = "ANCHORED"
 
 (********************* ABSTRACT PACEMAKER (LiDO) ******************)
@@ -72,13 +72,13 @@ Push(n) ==
         /\ tree' = tree \cup {[type |-> "C", round |-> round, caller |-> n, method |-> "None", voters |-> Q]}
         /\ UNCHANGED <<round, rem_time, fsm_state>>
 
-(********************* MÔI TRƯỜNG ĐỘNG ĐÃ TỐI ƯU ******************)
+(********************* OPTIMIZED ENVIRONMENT ******************)
 UpdateEnv == 
-    /\ rem_time = 0  \* CHỈ ĐỔI TRẠNG THÁI KHI HẾT GIỜ (Triệt tiêu bùng nổ)
+    /\ rem_time = 0  \* ONLY CHANGE STATE ON TIMEOUT (Suppress state explosion)
     /\ fsm_state' \in {"ANCHORED", "SOVEREIGN"}
     /\ UNCHANGED <<tree, local_times, round, rem_time>>
 
-(********************* TRẠNG THÁI TIẾP THEO (NEXT) ****************)
+(********************* NEXT STATE  ****************)
 Next == 
     \/ Elapse
     \/ TimeoutStartNext
@@ -89,11 +89,15 @@ Next ==
     \/ UpdateEnv
 
 (********************* FAIRNESS (LIVENESS) ************************)
+Safety == Init /\ [][Next]_vars
+
+
 Liveness == 
     /\ WF_vars(TimeoutStartNext)
     /\ WF_vars(EarlyStartNext)
     /\ \A n \in Nodes : WF_vars(Pull(n)) /\ WF_vars(Push(n))
     /\ \A n \in Nodes, m \in Method : WF_vars(Invoke(n, m))
 
-Spec == Init /\ [][Next]_vars /\ Liveness
+
+Spec == Safety /\ Liveness
 =====================================================================

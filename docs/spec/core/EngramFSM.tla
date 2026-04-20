@@ -20,17 +20,32 @@ ASSUME
 
 
 VARIABLES 
-    state,                          \* Current FSM state
-    btc_gap,                        \* Bitcoin layer verification gap
-    da_gap,                         \* Data Availability layer verification gap
-    is_das_failed,                  \* DAS sampling failure state
-    peer_count,                     \* Current number of P2P peers
-    safe_blocks,                    \* Hysteresis counter to prevent flapping
-    reanchoring_proof_valid         \* ZK proof verified onchain/off-chain
+    state,                                          \* Current FSM state
+    btc_gap,
+    da_gap,
+    \* h_btc_current, h_btc_submitted, h_btc_anchored                                        
+    \* h_da_local, h_da_verified,                         
+    is_das_failed,                                  \* DAS sampling failure state
+    peer_count,                                     \* Current number of P2P peers
+    safe_blocks,                                    \* Hysteresis counter to prevent flapping
+    reanchoring_proof_valid                         \* ZK proof verified onchain/off-chain
 
-vars == <<state, btc_gap, da_gap, peer_count, safe_blocks, reanchoring_proof_valid, is_das_failed>>
+vars_fsm == <<state, safe_blocks, btc_gap, da_gap, peer_count, reanchoring_proof_valid, is_das_failed>>
 env_vars == <<btc_gap, da_gap, peer_count, reanchoring_proof_valid, is_das_failed>>
 
+
+\* vars_fsm == <<state, h_local, h_verified, h_btc_current, h_btc_submitted, h_btc_anchored, peer_count, safe_blocks, reanchoring_proof_valid, is_das_failed>>
+\* env_vars == <<h_local, h_verified, h_btc_current, h_btc_submitted, h_btc_anchored, peer_count, reanchoring_proof_valid, is_das_failed>>
+
+\* -----------------------------------------------------------------------------
+\* TÍNH TOÁN GAP ĐỘNG (DYNAMIC GAPS)
+\* -----------------------------------------------------------------------------
+\* Min(a, b) == IF a < b THEN a ELSE b
+\* \* Bitcoin layer verification gap
+\* btc_gap == h_btc_current - Min(h_btc_submitted, h_btc_anchored)
+
+\* \* Data Availability layer verification gap
+\* da_gap == h_da_local - h_da_verified
 
 \* -----------------------------------------------------------------------------
 \* MACROS & DERIVED VARIABLES
@@ -75,7 +90,7 @@ SanityCheck == state /= "RECOVERING"
 \* -----------------------------------------------------------------------------
 \* STATE MACHINE LOGIC
 \* -----------------------------------------------------------------------------
-Init == 
+FSM_Init == 
     /\ state = "ANCHORED"
     /\ btc_gap = 0
     /\ da_gap = 0
@@ -158,21 +173,21 @@ FSM_Transition ==
     \/ SuspiciousToAnchored \/ SovereignToRecovering \/ RecoveringProgress 
     \/ RecoveringToAnchored \/ RecoveringToSuspicious \/ RecoveringToSovereign
 
-Next == UpdateSensors \/ (FSM_Transition /\ UNCHANGED env_vars)
+FSM_Next == UpdateSensors \/ (FSM_Transition /\ UNCHANGED env_vars)
 
 
 Fairness == 
-    /\ WF_vars(AnchoredToSuspicious /\ UNCHANGED env_vars)
-    /\ WF_vars(SuspiciousToSovereign /\ UNCHANGED env_vars)
-    /\ WF_vars(AnchoredToSovereign /\ UNCHANGED env_vars)
-    /\ WF_vars(SuspiciousToAnchored /\ UNCHANGED env_vars)
-    /\ WF_vars(SovereignToRecovering /\ UNCHANGED env_vars)
-    /\ WF_vars(RecoveringProgress /\ UNCHANGED env_vars)
-    /\ WF_vars(RecoveringToAnchored /\ UNCHANGED env_vars)
-    /\ WF_vars(RecoveringToSuspicious /\ UNCHANGED env_vars)
-    /\ WF_vars(RecoveringToSovereign /\ UNCHANGED env_vars)
+    /\ WF_vars_fsm(AnchoredToSuspicious /\ UNCHANGED env_vars)
+    /\ WF_vars_fsm(SuspiciousToSovereign /\ UNCHANGED env_vars)
+    /\ WF_vars_fsm(AnchoredToSovereign /\ UNCHANGED env_vars)
+    /\ WF_vars_fsm(SuspiciousToAnchored /\ UNCHANGED env_vars)
+    /\ WF_vars_fsm(SovereignToRecovering /\ UNCHANGED env_vars)
+    /\ WF_vars_fsm(RecoveringProgress /\ UNCHANGED env_vars)
+    /\ WF_vars_fsm(RecoveringToAnchored /\ UNCHANGED env_vars)
+    /\ WF_vars_fsm(RecoveringToSuspicious /\ UNCHANGED env_vars)
+    /\ WF_vars_fsm(RecoveringToSovereign /\ UNCHANGED env_vars)
 
-Spec == Init /\ [][Next]_vars /\ Fairness
+Spec == FSM_Init /\ [][FSM_Next]_(vars_fsm) /\ Fairness
 
 
 \* -----------------------------------------------------------------------------
@@ -183,11 +198,11 @@ Spec == Init /\ [][Next]_vars /\ Fairness
 CircuitBreakerSafety == withdraw_locked <=> (state \in {"SOVEREIGN", "RECOVERING"})
 
 \* Safety 2: Ensure the system never gets stuck (Deadlock-Free).
-NoDeadlockSafety == ENABLED Next
+NoDeadlockSafety == ENABLED FSM_Next
 
 \* Safety 3: The sequential nature of Hysteresis (No skipping steps allowed)
 HysteresisSafety == 
-    [][ (state = "RECOVERING" /\ state' = "ANCHORED") => (safe_blocks = HYSTERESIS_WAIT /\ reanchoring_proof_valid) ]_vars
+    [][ (state = "RECOVERING" /\ state' = "ANCHORED") => (safe_blocks = HYSTERESIS_WAIT /\ reanchoring_proof_valid) ]_vars_fsm
 
 
 \* -----------------------------------------------------------------------------
