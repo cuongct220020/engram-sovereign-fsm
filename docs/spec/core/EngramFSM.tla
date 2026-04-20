@@ -4,48 +4,42 @@ EXTENDS Integers
 CONSTANTS 
     T_SUSPICIOUS,                   \* Warning delay threshold (Gray Failure)
     T_SOVEREIGN,                    \* Sovereign partition threshold (Hard Failure)
-    MAX_BTC_GAP,                    \* Maximum BTC gap limit to bound state space
     T_DA,                           \* Block gap since the last DA publication verification
-    MAX_DA_GAP,                     \* Maximum DA gap limit to bound state space
     HYSTERESIS_WAIT,                \* Consecutive safe blocks required for successful recovery
     MIN_PEERS                       \* Minimum peers required to prevent isolation
 
 
 ASSUME 
-    /\ T_SUSPICIOUS \in Nat /\ T_SOVEREIGN \in Nat /\ MAX_BTC_GAP \in Nat 
-    /\ T_DA \in Nat /\ MAX_DA_GAP \in Nat
-    /\ HYSTERESIS_WAIT \in Nat  /\ MIN_PEERS \in Nat
-    /\ T_SUSPICIOUS < T_SOVEREIGN /\ T_SOVEREIGN < MAX_BTC_GAP
-    /\ T_DA < MAX_DA_GAP
+    /\ T_SUSPICIOUS \in Nat 
+    /\ T_SOVEREIGN \in Nat 
+    /\ T_DA \in Nat 
+    /\ HYSTERESIS_WAIT \in Nat  
+    /\ MIN_PEERS \in Nat
+    /\ T_SUSPICIOUS < T_SOVEREIGN
 
 
 VARIABLES 
-    state,                                          \* Current FSM state
-    btc_gap,
-    da_gap,
-    \* h_btc_current, h_btc_submitted, h_btc_anchored                                        
-    \* h_da_local, h_da_verified,                         
-    is_das_failed,                                  \* DAS sampling failure state
-    peer_count,                                     \* Current number of P2P peers
-    safe_blocks,                                    \* Hysteresis counter to prevent flapping
-    reanchoring_proof_valid                         \* ZK proof verified onchain/off-chain
+    state,                                              \* Current FSM state
+    h_btc_current, h_btc_submitted, h_btc_anchored,     \* Bitcoin height sensor
+    h_da_local, h_da_verified,                          \* DA height sensor
+    is_das_failed,                                      \* DAS sampling failure state
+    peer_count,                                         \* Current number of P2P peers
+    safe_blocks,                                        \* Hysteresis counter to prevent flapping
+    reanchoring_proof_valid                             \* ZK proof verified onchain/off-chain
 
-vars_fsm == <<state, safe_blocks, btc_gap, da_gap, peer_count, reanchoring_proof_valid, is_das_failed>>
-env_vars == <<btc_gap, da_gap, peer_count, reanchoring_proof_valid, is_das_failed>>
+vars_fsm == <<state, h_da_local, h_da_verified, h_btc_current, h_btc_submitted, h_btc_anchored, peer_count, safe_blocks, reanchoring_proof_valid, is_das_failed>>
+env_vars == <<h_da_local, h_da_verified, h_btc_current, h_btc_submitted, h_btc_anchored, peer_count, reanchoring_proof_valid, is_das_failed>>
 
+-----------------------------------------------------------------------------
+\* CALCULATE DYNAMIC GAPS
+-----------------------------------------------------------------------------
+Min(a, b) == IF a < b THEN a ELSE b
 
-\* vars_fsm == <<state, h_local, h_verified, h_btc_current, h_btc_submitted, h_btc_anchored, peer_count, safe_blocks, reanchoring_proof_valid, is_das_failed>>
-\* env_vars == <<h_local, h_verified, h_btc_current, h_btc_submitted, h_btc_anchored, peer_count, reanchoring_proof_valid, is_das_failed>>
+\* Bitcoin layer verification gap
+btc_gap == h_btc_current - Min(h_btc_submitted, h_btc_anchored)
 
-\* -----------------------------------------------------------------------------
-\* TÍNH TOÁN GAP ĐỘNG (DYNAMIC GAPS)
-\* -----------------------------------------------------------------------------
-\* Min(a, b) == IF a < b THEN a ELSE b
-\* \* Bitcoin layer verification gap
-\* btc_gap == h_btc_current - Min(h_btc_submitted, h_btc_anchored)
-
-\* \* Data Availability layer verification gap
-\* da_gap == h_da_local - h_da_verified
+\* Data Availability layer verification gap
+da_gap == h_da_local - h_da_verified
 
 \* -----------------------------------------------------------------------------
 \* MACROS & DERIVED VARIABLES
@@ -76,8 +70,8 @@ IsHealthyCondition ==
 \* -----------------------------------------------------------------------------
 TypeInvariant == 
     /\ state \in {"ANCHORED", "SUSPICIOUS", "SOVEREIGN", "RECOVERING"}
-    /\ btc_gap \in 0..MAX_BTC_GAP
-    /\ da_gap \in 0..MAX_DA_GAP
+    /\ btc_gap >= 0
+    /\ da_gap >= 0
     /\ is_das_failed \in BOOLEAN
     /\ peer_count \in 0..(MIN_PEERS * 2)
     /\ safe_blocks \in 0..HYSTERESIS_WAIT
@@ -91,21 +85,32 @@ SanityCheck == state /= "RECOVERING"
 \* STATE MACHINE LOGIC
 \* -----------------------------------------------------------------------------
 FSM_Init == 
-    /\ state = "ANCHORED"
-    /\ btc_gap = 0
-    /\ da_gap = 0
-    /\ is_das_failed = FALSE
-    /\ peer_count = MIN_PEERS + 1
-    /\ safe_blocks = 0
+    /\ state = "ANCHORED" 
+    /\ h_btc_current = 0 
+    /\ h_btc_submitted = 0 
+    /\ h_btc_anchored = 0 
+    /\ h_da_local = 0 
+    /\ h_da_verified = 0 
+    /\ is_das_failed = FALSE 
+    /\ peer_count = MIN_PEERS + 1 
+    /\ safe_blocks = 0 
     /\ reanchoring_proof_valid = FALSE
 
 \* Non-deterministic environment variable updates (Simulates real network)
 UpdateSensors ==
-    /\ btc_gap' \in 0..MAX_BTC_GAP
-    /\ da_gap' \in 0..MAX_DA_GAP
+    \* The height of a block can only increase or remain constant; each subsequent block cannot exceed the previous one.
+    /\ h_btc_current' \in {h_btc_current, h_btc_current + 1}
+    /\ h_btc_submitted' \in {h_btc_submitted, h_btc_current'}
+    /\ h_btc_anchored' \in {h_btc_anchored, h_btc_submitted'}
+    
+    /\ h_da_local' \in {h_da_local, h_da_local + 1}
+    /\ h_da_verified' \in {h_da_verified, h_da_local'}
+    
+    \* Random external environmental variables
     /\ is_das_failed' \in BOOLEAN
     /\ reanchoring_proof_valid' \in BOOLEAN
-    /\ peer_count' \in 0..MIN_PEERS * 2
+    /\ peer_count' \in 0..(MIN_PEERS * 2)
+    
     /\ UNCHANGED <<state, safe_blocks>>
 
 \* FSM state transitions based on sensor data
