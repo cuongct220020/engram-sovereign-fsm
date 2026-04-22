@@ -7,7 +7,8 @@ CONSTANTS
     ResetTime, 
     Method, 
     Stake, 
-    TotalStake
+    TotalStake,
+    MaxBTCHeight
 
 (********************* CONSENSUS LAYER VARIABLES (LAYER 2) ***********)
 VARIABLES 
@@ -41,72 +42,113 @@ Init ==
     /\ fsm_state = "ANCHORED"
     /\ h_btc_current = 0
 
-(********************* ABSTRACT PACEMAKER (LiDO) ******************)
+
+(********************* ABSTRACT PACEMAKER (LiDO) ******************) 
 Elapse == 
-    /\ rem_time > 0
-    /\ rem_time' = rem_time - 1
-    /\ UNCHANGED <<tree, local_times, round, fsm_state>>
+    \* Block the countdown timer if the Leader has started Pull (E) or Invoke (M)
+    /\ ~\E c \in tree : c.c_round = round /\ c.type \in {"E", "M"} 
+    /\ rem_time > 0 
+    /\ rem_time' = rem_time - 1 
+    /\ UNCHANGED <<tree, local_times, round, fsm_state, h_btc_current>>
 
 TimeoutStartNext == 
-    /\ rem_time = 0
-    /\ round' = round + 1
-    /\ rem_time' = ResetTime
-    /\ UNCHANGED <<tree, local_times, fsm_state>>
+    /\ rem_time = 0 
+    /\ round' = round + 1 
+    /\ rem_time' = ResetTime 
+    /\ UNCHANGED <<tree, local_times, fsm_state, h_btc_current>>
 
-EarlyStartNext ==
-    /\ \E c \in tree : c.type = "C" /\ c.round = round
-    /\ round' = round + 1
-    /\ rem_time' = ResetTime
-    /\ UNCHANGED <<tree, local_times, fsm_state>>
+EarlyStartNext == 
+    /\ \E c \in tree : c.type = "C" /\ c.c_round = round 
+    /\ round' = round + 1 
+    /\ rem_time' = ResetTime 
+    /\ UNCHANGED <<tree, local_times, fsm_state, h_btc_current>>
 
 
 (********************* FORK-CHOICE & CAN_ELECT ********************)
 \* Find the latest CCache block that node s supports.
 active(tr, s) == 
     LET s_votes == {c \in tr : c.type = "C" /\ s \in c.voters}
-    IN IF s_votes = {} THEN [type |-> "C", round |-> 0] 
-       ELSE CHOOSE c \in s_votes : \A c2 \in s_votes : c.round >= c2.round
+    IN IF s_votes = {} THEN [type |-> "C", c_round |-> 0] 
+       ELSE CHOOSE c \in s_votes : \A c2 \in s_votes : c.c_round >= c2.c_round
 
 \* K-Deep Finality Rule
 IsKDeep(c, k) == h_btc_current - c.btc_height >= k
 
 \* Simplify: The branch with the largest total stake is based on the number of voters.
-IsMaxStakeBranch(c) == SumStake[c.voters] >= TotalStake \div 2 
+IsMaxStakeBranch(c) == 
+    \/ c.c_round = 0  \* Ngoại lệ luôn hợp lệ cho Genesis block
+    \/ SumStake[c.voters] >= TotalStake \div 2
 
 canElect(tr, c, Q, state_fsm) == 
     /\ c.type = "C" 
-    /\ \A s \in Q : c.round >= active(tr, s).round
+    /\ \A s \in Q : c.c_round >= active(tr, s).c_round
     /\ CASE state_fsm = "ANCHORED"   -> IsKDeep(c, 2) \* Use 2 instead of 6 for faster TLC performance.
          [] state_fsm = "SOVEREIGN"  -> IsMaxStakeBranch(c)
          [] state_fsm = "SUSPICIOUS" -> IsKDeep(c, 2)
          [] OTHER                    -> TRUE   
 
+
 (********************* ADOB CORE OPERATIONS ***********************)
 Pull(n) == 
-    LET Q == CHOOSE q \in SUBSET Nodes : isSQuorum(q) IN
-    \E Cmax \in {c \in tree : c.type = "C"} \cup {[type |-> "C", round |-> 0, voters |-> {}, btc_height |-> 0]}: 
+    LET Q == CHOOSE q \in SUBSET Nodes : isSQuorum(q) 
+        VirtualRoot == [type |-> "C", c_round |-> 0, voters |-> {}, btc_height |-> 0]
+        ValidCaches == {c \in tree : c.type = "C"} \cup {VirtualRoot}
+    IN \E Cmax \in ValidCaches: 
         /\ canElect(tree, Cmax, Q, fsm_state)
         /\ round > local_times[n]
         /\ local_times' = [s \in Nodes |-> IF s \in Q THEN round ELSE local_times[s]]
-        /\ tree' = tree \cup {[type |-> "E", round |-> round, caller |-> n, method |-> "None", voters |-> Q, btc_height |-> h_btc_current]}
+        /\ LET new_E_cache == [
+               type       |-> "E", 
+               c_round    |-> round, 
+               caller     |-> n, 
+               method     |-> "None", 
+               voters     |-> Q, 
+               btc_height |-> h_btc_current
+           ]
+           IN tree' = tree \cup {new_E_cache}
         /\ UNCHANGED <<round, rem_time, fsm_state, h_btc_current>>
 
+
 Invoke(n, m) == 
-    /\ m \in Method
-    /\ \E c \in tree : c.type = "E" /\ c.caller = n /\ c.round = round
-    /\ tree' = tree \cup {[type |-> "M", round |-> round, caller |-> n, method |-> m, voters |-> {n}, btc_height |-> h_btc_current]}
+    /\ m \in Method 
+    /\ \E c \in tree : 
+        /\ c.type = "E" 
+        /\ c.caller = n 
+        /\ c.c_round = round 
+    /\ LET new_M_cache == [
+           type       |-> "M", 
+           c_round    |-> round, 
+           caller     |-> n, 
+           method     |-> m, 
+           voters     |-> {n}, 
+           btc_height |-> h_btc_current
+       ]
+       IN tree' = tree \cup {new_M_cache} 
     /\ UNCHANGED <<local_times, round, rem_time, fsm_state, h_btc_current>>
+
 
 Push(n) == 
     LET Q == CHOOSE q \in SUBSET Nodes : isSQuorum(q) IN 
-        /\ \E c \in tree : c.type = "M" /\ c.caller = n /\ c.round = round
-        /\ local_times' = [s \in Nodes |-> IF s \in Q THEN round + 1 ELSE local_times[s]]
-        /\ tree' = tree \cup {[type |-> "C", round |-> round, caller |-> n, method |-> "None", voters |-> Q, btc_height |-> h_btc_current]}
-        /\ UNCHANGED <<round, rem_time, fsm_state, h_btc_current>>
+    /\ \E c \in tree : 
+        /\ c.type = "M" 
+        /\ c.caller = n 
+        /\ c.c_round = round 
+    /\ local_times' = [s \in Nodes |-> IF s \in Q THEN round + 1 ELSE local_times[s]] 
+    /\ LET new_C_cache == [
+           type       |-> "C", 
+           c_round    |-> round, 
+           caller     |-> n, 
+           method     |-> "None", 
+           voters     |-> Q, 
+           btc_height |-> h_btc_current
+       ]
+       IN tree' = tree \cup {new_C_cache} 
+    /\ UNCHANGED <<round, rem_time, fsm_state, h_btc_current>>
 
 (********************* OPTIMIZED ENVIRONMENT ******************)
 UpdateEnv == 
-    /\ rem_time = 0  \* ONLY CHANGE STATE ON TIMEOUT (Suppress state explosion)
+    /\ h_btc_current < MaxBTCHeight
+    /\ h_btc_current' = h_btc_current + 1
     /\ fsm_state' \in {"ANCHORED", "SOVEREIGN"}
     /\ UNCHANGED <<tree, local_times, round, rem_time>>
 
@@ -124,12 +166,13 @@ Next ==
 Safety == Init /\ [][Next]_vars
 
 
-Fairness == 
+Liveness == 
     /\ WF_vars(TimeoutStartNext)
     /\ WF_vars(EarlyStartNext)
+    /\ WF_vars(UpdateEnv)
     /\ \A n \in Nodes : WF_vars(Pull(n)) /\ WF_vars(Push(n))
     /\ \A n \in Nodes, m \in Method : WF_vars(Invoke(n, m))
 
 
-Spec == Safety /\ Fairness
+Spec == Safety /\ Liveness
 =====================================================================
