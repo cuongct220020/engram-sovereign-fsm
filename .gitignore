@@ -54,3 +54,8 @@ Verifier.toml
 
 # Local bind mound service data
 data/
+
+
+# File backup
+*.backup
+*.bak

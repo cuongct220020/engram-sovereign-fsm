@@ -38,11 +38,11 @@ isSQuorum(Q) == Q \in ValidQuorums
 Init == 
     /\ tree = {} 
     /\ local_times = [n \in Nodes |-> 0] 
-    /\ round = 0        
+    /\ round = 1        
     /\ rem_time = 0
     /\ fsm_state = "ANCHORED"
-    /\ h_btc_current = 0
-    /\ h_btc_anchored = 0
+    /\ h_btc_current = 2
+    /\ h_btc_anchored = 2
 
 
 (********************* ABSTRACT PACEMAKER (LiDO) ******************) 
@@ -152,22 +152,22 @@ Push(n) ==
 
 (********************* OPTIMIZED ENVIRONMENT ******************)
 UpdateEnv == 
-    /\ h_btc_current < MaxBTCHeight 
-    /\ h_btc_current' = h_btc_current + 1 
-    \* Điểm neo có thể giữ nguyên (chưa chốt checkpoint) hoặc được cập nhật 
-    /\ h_btc_anchored' \in {h_btc_anchored, h_btc_current'} 
-    /\ fsm_state' = "ANCHORED" 
+    /\ h_btc_current' \in {h_btc_current, h_btc_current + 1}
+    /\ h_btc_anchored' \in h_btc_anchored..h_btc_current'  \* Cho phép h_btc_anchored bắt kịp thoải mái
+    /\ fsm_state' = fsm_state  
     /\ UNCHANGED <<tree, local_times, round, rem_time>>
+
+\* BỔ SUNG ACTION NÀY: Phản xạ các bước chuyển trạng thái (như SOVEREIGN) từ FSM
+FSMStateChange ==
+    /\ fsm_state' \in {"ANCHORED", "SOVEREIGN"}
+    /\ fsm_state' /= fsm_state
+    /\ UNCHANGED <<tree, local_times, round, rem_time, h_btc_current, h_btc_anchored>>
 
 \* Mô phỏng Bitcoin Reorg làm mất giao dịch OP_RETURN
 BitcoinReorg == 
-    /\ h_btc_anchored > 0
-    \* Chiều cao thực của Bitcoin vẫn tiếp tục tăng hoặc giữ nguyên
-    /\ h_btc_current' \in {h_btc_current, h_btc_current + 1}
-    \* Giao dịch OP_RETURN bị mất, điểm neo bị đẩy lùi về một mốc trong quá khứ
-    /\ \E lost_anchor \in 0..(h_btc_anchored - 1): 
-           h_btc_anchored' = lost_anchor
-    \* FSM kích hoạt ngắt mạch khẩn cấp do btc_gap tăng vọt
+    /\ h_btc_anchored > 0  
+    /\ h_btc_current' \in {h_btc_current, h_btc_current + 1} 
+    /\ \E lost_anchor \in 0..(h_btc_anchored - 1): h_btc_anchored' = lost_anchor 
     /\ fsm_state' = "SOVEREIGN"
     /\ UNCHANGED <<tree, local_times, round, rem_time>>
 
@@ -179,7 +179,8 @@ Next ==
     \/ \E n \in Nodes : Pull(n) 
     \/ \E n \in Nodes, m \in Method : Invoke(n, m) 
     \/ \E n \in Nodes : Push(n) 
-    \/ UpdateEnv
+    \/ UpdateEnv 
+    \/ FSMStateChange
     \/ BitcoinReorg
 
 (********************* FAIRNESS (LIVENESS) ************************)

@@ -1,5 +1,5 @@
 --------------------------- MODULE EngramFSM ---------------------------
-EXTENDS Integers
+EXTENDS Integers, EngramVars
 
 CONSTANTS 
     T_SUSPICIOUS,                   \* Warning delay threshold (Gray Failure)
@@ -18,25 +18,13 @@ ASSUME
     /\ T_SUSPICIOUS < T_SOVEREIGN
 
 
-VARIABLES 
-    state,                                              \* Current FSM state
-    h_btc_current, h_btc_submitted, h_btc_anchored,     \* Bitcoin height sensor
-    h_da_local, h_da_verified,                          \* DA height sensor
-    is_das_failed,                                      \* DAS sampling failure state
-    peer_count,                                         \* Current number of P2P peers
-    safe_blocks,                                        \* Hysteresis counter to prevent flapping
-    reanchoring_proof_valid                             \* ZK proof verified onchain/off-chain
-
-vars_fsm == <<state, h_da_local, h_da_verified, h_btc_current, h_btc_submitted, h_btc_anchored, peer_count, safe_blocks, reanchoring_proof_valid, is_das_failed>>
-env_vars == <<h_da_local, h_da_verified, h_btc_current, h_btc_submitted, h_btc_anchored, peer_count, reanchoring_proof_valid, is_das_failed>>
-
 -----------------------------------------------------------------------------
 \* CALCULATE DYNAMIC GAPS
 -----------------------------------------------------------------------------
-Min(a, b) == IF a < b THEN a ELSE b
+MinVal(a, b) == IF a < b THEN a ELSE b
 
 \* Bitcoin layer verification gap
-btc_gap == h_btc_current - Min(h_btc_submitted, h_btc_anchored)
+btc_gap == h_btc_current - MinVal(h_btc_submitted, h_btc_anchored)
 
 \* Data Availability layer verification gap
 da_gap == h_da_local - h_da_verified
@@ -46,7 +34,7 @@ da_gap == h_da_local - h_da_verified
 \* -----------------------------------------------------------------------------
 withdraw_locked == state \in {"SOVEREIGN", "RECOVERING"}
 
-IsDAHealthy == (da_gap < T_DA) /\ ~is_das_failed
+FSM_IsDAHealthy == (da_gap < T_DA) /\ ~is_das_failed
 
 \* Critical failure conditions (Triggers circuit breaker)
 IsCriticalCondition == btc_gap >= T_SOVEREIGN 
@@ -61,7 +49,7 @@ IsWarningCondition ==
 \* Completely healthy network conditions
 IsHealthyCondition == 
     /\ btc_gap < T_SUSPICIOUS
-    /\ IsDAHealthy
+    /\ FSM_IsDAHealthy
     /\ peer_count >= MIN_PEERS
 
 
@@ -112,6 +100,7 @@ UpdateSensors ==
     /\ peer_count' \in 0..(MIN_PEERS * 2)
     
     /\ UNCHANGED <<state, safe_blocks>>
+
 
 \* FSM state transitions based on sensor data
 AnchoredToSuspicious == 
@@ -178,21 +167,21 @@ FSM_Transition ==
     \/ SuspiciousToAnchored \/ SovereignToRecovering \/ RecoveringProgress 
     \/ RecoveringToAnchored \/ RecoveringToSuspicious \/ RecoveringToSovereign
 
-FSM_Next == UpdateSensors \/ (FSM_Transition /\ UNCHANGED env_vars)
+FSM_Next == UpdateSensors \/ (FSM_Transition /\ UNCHANGED envVars)
 
 
-Fairness == 
-    /\ WF_vars_fsm(AnchoredToSuspicious /\ UNCHANGED env_vars)
-    /\ WF_vars_fsm(SuspiciousToSovereign /\ UNCHANGED env_vars)
-    /\ WF_vars_fsm(AnchoredToSovereign /\ UNCHANGED env_vars)
-    /\ WF_vars_fsm(SuspiciousToAnchored /\ UNCHANGED env_vars)
-    /\ WF_vars_fsm(SovereignToRecovering /\ UNCHANGED env_vars)
-    /\ WF_vars_fsm(RecoveringProgress /\ UNCHANGED env_vars)
-    /\ WF_vars_fsm(RecoveringToAnchored /\ UNCHANGED env_vars)
-    /\ WF_vars_fsm(RecoveringToSuspicious /\ UNCHANGED env_vars)
-    /\ WF_vars_fsm(RecoveringToSovereign /\ UNCHANGED env_vars)
+FSM_Fairness == 
+    /\ WF_fsmVars(AnchoredToSuspicious /\ UNCHANGED envVars)
+    /\ WF_fsmVars(SuspiciousToSovereign /\ UNCHANGED envVars)
+    /\ WF_fsmVars(AnchoredToSovereign /\ UNCHANGED envVars)
+    /\ WF_fsmVars(SuspiciousToAnchored /\ UNCHANGED envVars)
+    /\ WF_fsmVars(SovereignToRecovering /\ UNCHANGED envVars)
+    /\ WF_fsmVars(RecoveringProgress /\ UNCHANGED envVars)
+    /\ WF_fsmVars(RecoveringToAnchored /\ UNCHANGED envVars)
+    /\ WF_fsmVars(RecoveringToSuspicious /\ UNCHANGED envVars)
+    /\ WF_fsmVars(RecoveringToSovereign /\ UNCHANGED envVars)
 
-Spec == FSM_Init /\ [][FSM_Next]_(vars_fsm) /\ Fairness
+Spec == FSM_Init /\ [][FSM_Next]_fsmVars /\ FSM_Fairness
 
 
 \* -----------------------------------------------------------------------------
@@ -207,7 +196,7 @@ NoDeadlockSafety == ENABLED FSM_Next
 
 \* Safety 3: The sequential nature of Hysteresis (No skipping steps allowed)
 HysteresisSafety == 
-    [][ (state = "RECOVERING" /\ state' = "ANCHORED") => (safe_blocks = HYSTERESIS_WAIT /\ reanchoring_proof_valid) ]_vars_fsm
+    [][ (state = "RECOVERING" /\ state' = "ANCHORED") => (safe_blocks = HYSTERESIS_WAIT /\ reanchoring_proof_valid) ]_fsmVars
 
 
 \* -----------------------------------------------------------------------------

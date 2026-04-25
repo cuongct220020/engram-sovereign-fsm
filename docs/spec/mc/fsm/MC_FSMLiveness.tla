@@ -14,6 +14,6 @@ LivenessUpdateSensors ==
     /\ UNCHANGED <<state, safe_blocks>>
 
 \* Create Next and Spec tailored for Liveness
-LivenessNext == (FSM_Transition /\ UNCHANGED env_vars) \/ LivenessUpdateSensors
-LivenessSpec == FSM_Init /\ [][LivenessNext]_vars_fsm /\ Fairness
+LivenessNext == (FSM_Transition /\ UNCHANGED envVars) \/ LivenessUpdateSensors
+LivenessSpec == FSM_Init /\ [][LivenessNext]_fsmVars /\ FSM_Fairness
 =============================================================

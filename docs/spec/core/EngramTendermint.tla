@@ -13,7 +13,7 @@
  *)
 
 \* EXTENDS Integers, FiniteSets, Apalache, typedefs
-EXTENDS Integers, FiniteSets
+EXTENDS Integers, FiniteSets, EngramVars
 
 (********************* PROTOCOL PARAMETERS **********************************)
 \* General protocol parameters
@@ -147,93 +147,8 @@ Max(S) == CHOOSE x \in S : \A y \in S : y <= x
 \*   IN FoldSet( PlusOne, 0, S )
 Card(S) == Cardinality(S)
 
-(********************* PROTOCOL STATE VARIABLES ******************************)
-VARIABLES
-    \* @type: PROCESS -> ROUND;
-    round,    \* a process round number
-    \* @type: PROCESS -> STEP;
-    step,     \* a process step
-    \* @type: PROCESS -> DECISION;
-    decision, \* process decision
-    \* @type: PROCESS -> VALUE;
-    lockedValue,  \* a locked value
-    \* @type: PROCESS -> ROUND;
-    lockedRound,  \* a locked round
-    \* @type: PROCESS -> PROPOSAL;
-    validValue,   \* a valid value
-    \* @type: PROCESS -> ROUND;
-    validRound    \* a valid round
 
-coreVars == 
-  <<round, step, decision, lockedValue, 
-  lockedRound, validValue, validRound>>
-
-\* time-related variables
-VARIABLES  
-  \* @type: PROCESS -> TIME;
-  localClock, \* a process local clock: Corr -> Ticks
-  \* @type: TIME;
-  realTime   \* a reference Newtonian real time
-
-temporalVars == <<localClock, realTime>>
-
-\* book-keeping variables
-VARIABLES
-  \* @type: ROUND -> Set(PROPMESSAGE);
-  msgsPropose,   \* PROPOSE messages broadcast in the system, Rounds -> Messages
-  \* @type: ROUND -> Set(PREMESSAGE);
-  msgsPrevote,   \* PREVOTE messages broadcast in the system, Rounds -> Messages
-  \* @type: ROUND -> Set(PREMESSAGE);
-  msgsPrecommit, \* PRECOMMIT messages broadcast in the system, Rounds -> Messages
-  \* @type: Set(MESSAGE);
-  evidence, \* the messages that were used by the correct processes to make transitions
-  \* @type: ACTION;
-  action,       \* we use this variable to see which action was taken
-  \* @type: PROCESS -> Set(PROPMESSAGE);
-  receivedTimelyProposal, \* used to keep track when a process receives a timely PROPOSAL message
-  \* @type: <<ROUND,PROCESS>> -> TIME;
-  inspectedProposal \* used to keep track when a process tries to receive a message
-  
-\* Action is excluded from the tuple, because it always changes
-bookkeepingVars == 
-  <<msgsPropose, msgsPrevote, msgsPrecommit, 
-  evidence, (*action,*) receivedTimelyProposal, 
-  inspectedProposal>>
-
-\* Invariant support
-VARIABLES
-  \* @type: ROUND -> TIME;
-  beginRound, \* the minimum of the local clocks at the time any process entered a new round
-  \* @type: PROCESS -> TIME;
-  endConsensus, \* the local time when a decision is made
-  \* @type: ROUND -> TIME;
-  lastBeginRound, \* the maximum of the local clocks in each round
-  \* @type: ROUND -> TIME;
-  proposalTime, \* the real time when a proposer proposes in a round
-  \* @type: ROUND -> TIME;
-  proposalReceivedTime \* the real time when a correct process first receives a proposal message in a round
-
-invariantVars == 
-  <<beginRound, endConsensus, lastBeginRound,
-  proposalTime, proposalReceivedTime>>
-
-VARIABLE 
-    state,                   \* Trạng thái FSM (ANCHORED, SUSPICIOUS,...)
-    h_btc_current,           \* Chiều cao khối BTC hiện tại
-    h_btc_submitted,         \* Chiều cao BTC đã submit
-    h_btc_anchored,          \* Chiều cao BTC đã chốt an toàn
-    h_da_local,              \* Chiều cao DA local
-    h_da_verified,           \* Chiều cao DA đã xác thực
-    is_das_failed,           \* Trạng thái lỗi lấy mẫu DA
-    peer_count,              \* Số lượng node peer
-    safe_blocks,             \* Bộ đếm khối an toàn (phục hồi)
-    reanchoring_proof_valid  \* Bằng chứng ZK hợp lệ
-
-fsmVars == <<state, h_btc_current, h_btc_submitted, h_btc_anchored, h_da_local, h_da_verified, is_das_failed, peer_count, safe_blocks, reanchoring_proof_valid>>
-
-IsDAHealthy == ~is_das_failed
-vars == <<coreVars, temporalVars, bookkeepingVars, action, invariantVars, fsmVars>>
-
+TM_IsDAHealthy == ~is_das_failed
 ContainsWithdrawal(p) == FALSE
 
 \* The validity predicate
@@ -243,7 +158,7 @@ IsValid(p) ==
     \* Luật 1: Leader không được nói dối về trạng thái chuỗi ngoại biên
     /\ p.fsm_state = state
     /\ p.btc_anchored = h_btc_anchored
-    /\ p.da_receipt = IsDAHealthy
+    /\ p.da_receipt = TM_IsDAHealthy
     \* Luật 2: Đòi hỏi an ninh ngoại sinh (DA)
     /\ (p.fsm_state \in {"ANCHORED", "RECOVERING"}) => (p.da_receipt = TRUE)
     \* Luật 3: Kích hoạt ngắt mạch kinh tế (Circuit Breaker)
@@ -463,7 +378,7 @@ InsertProposal(p) ==
   /\ \A m \in msgsPropose[r]: m.src /= p
   /\ \E v \in ValidValues:
        LET prop == IF validValue[p] /= NilProposal THEN validValue[p] 
-                   ELSE [ value |-> v, timestamp |-> localClock[p], round |-> r, fsm_state |-> state, da_receipt |-> IsDAHealthy, btc_anchored |-> h_btc_anchored ]
+                   ELSE [ value |-> v, timestamp |-> localClock[p], round |-> r, fsm_state |-> state, da_receipt |-> TM_IsDAHealthy, btc_anchored |-> h_btc_anchored ]
        IN BroadcastProposal(p, r, prop, validRound[p])
   /\ proposalTime' = [proposalTime EXCEPT ![r] = realTime]
   /\ UNCHANGED <<temporalVars, coreVars, fsmVars>>
@@ -503,22 +418,24 @@ ReceiveProposal(p) ==
 \* lines 22-27
 \* @type: (PROCESS) => Bool;
 UponProposalInPropose(p) ==
-  LET r == round[p] IN
-  \E msg \in receivedTimelyProposal[p] :
-      /\ msg.type = "PROPOSAL"
-      /\ msg.src = Proposer[r]
-      /\ msg.validRound = NilRound
-      /\ step[p] = "PROPOSE"
-      /\ evidence' = {msg} \union evidence
-      /\ LET prop == msg.proposal
-             mid == IF IsValid(prop) /\ (lockedRound[p] = NilRound \/ lockedValue[p] = prop.value)
-                    THEN Id(prop) ELSE NilProposal
-         IN BroadcastPrevote(p, r, mid)
-      /\ step' = [step EXCEPT ![p] = "PREVOTE"]
-      /\ UNCHANGED <<temporalVars, invariantVars, fsmVars>>
-      /\ UNCHANGED <<round, decision, lockedValue, lockedRound, validValue, validRound>>
-      /\ UNCHANGED <<msgsPropose, msgsPrecommit, receivedTimelyProposal, inspectedProposal>>
-      /\ action' = "UponProposalInPropose"
+    LET r == round[p] IN
+    \E msg \in receivedTimelyProposal[p] :
+        /\ msg.type = "PROPOSAL"
+        /\ msg.round = r
+        /\ msg.src = Proposer[r]
+        /\ msg.validRound = NilRound
+        /\ step[p] = "PROPOSE"
+        /\ evidence' = {msg} \union evidence
+        /\ LET prop == msg.proposal
+               mid == IF IsValid(prop) /\ (lockedRound[p] = NilRound \/ lockedValue[p] = prop.value) 
+                      THEN Id(prop) 
+                      ELSE NilProposal
+           IN BroadcastPrevote(p, r, mid)
+        /\ step' = [step EXCEPT ![p] = "PREVOTE"]
+        /\ UNCHANGED <<temporalVars, invariantVars, fsmVars>>
+        /\ UNCHANGED <<round, decision, lockedValue, lockedRound, validValue, validRound>>
+        /\ UNCHANGED <<msgsPropose, msgsPrecommit, receivedTimelyProposal, inspectedProposal>>
+        /\ action' = "UponProposalInPropose"
 
 \* lines 28-33        
 \* [PBTS-ALG-OLD-PREVOTE.0]
@@ -704,15 +621,15 @@ OnRoundCatchup(p) ==
 
 (********************* PROTOCOL TRANSITIONS ******************************)
 \* advance the global clock
-\* @type: Bool;
-AdvanceRealTime == 
+AdvanceRealTime ==
     /\ ValidTime(realTime)
     /\ \E t \in Timestamps:
-      /\ t > realTime
-      /\ realTime' = t
-      /\ localClock' = [p \in Corr |-> localClock[p] + (t - realTime)]  
-    /\ UNCHANGED <<coreVars, bookkeepingVars, invariantVars, fsmVars>>
-    /\ action' = "AdvanceRealTime"
+       /\ t > realTime
+       /\ realTime' = t
+       /\ localClock' = [p \in Corr |-> localClock[p] + (t - realTime)]
+       /\ UNCHANGED <<coreVars, invariantVars, fsmVars>>
+       /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit, evidence, receivedTimelyProposal, inspectedProposal>>
+       /\ action' = "AdvanceRealTime"
     
 \* advance the local clock of node p to some larger time t, not necessarily by 1
 \* #type: (PROCESS) => Bool;
@@ -822,11 +739,17 @@ HybridSafety ==
     \A p \in Corr:
         decision[p] /= NilDecision => IsValid(decision[p][1])
 
+\* [EXTERNAL-VALIDITY] Đảm bảo không có giao dịch rác (bịa đặt) nào được chốt
+ExternalValidity == 
+    \A p \in Corr : 
+        decision[p] /= NilDecision => decision[p][1].value \in ValidValues
+
 Inv ==
     /\ AgreementOnValue 
     /\ ConsensusTimeValid
     /\ ConsensusSafeValidCorrProp
     /\ HybridSafety
+    /\ ExternalValidity
     \* /\ ConsensusRealTimeValid
     \* /\ ConsensusRealTimeValidCorr
     \* /\ BoundedDelay
@@ -838,9 +761,9 @@ Inv ==
 EventualDecision == <> (\E p \in Corr : step[p] = "DECIDED")
 
 \* Yêu cầu tính công bằng (Fairness) để hệ thống thực sự chạy thay vì đứng im
-Fairness == 
-    /\ \A p \in Corr : WF_vars(MessageProcessing(p))
-    /\ WF_vars(AdvanceRealTime)
+TM_Fairness == 
+    /\ \A p \in Corr : WF_tendermintVars(MessageProcessing(p))
+    /\ WF_tendermintVars(AdvanceRealTime)
 
-LivenessSpec == Init /\ [][Next]_vars /\ Fairness
+LivenessSpec == Init /\ [][Next]_tendermintVars /\ TM_Fairness
 =============================================================================    

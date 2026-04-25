@@ -402,24 +402,22 @@ If you have the TLA+ extension installed in VS Code, you can run checks without 
 
 ```mermaid
 graph TD
-    subgraph Tang_1 ["Tầng 1: Lõi Trừu tượng"]
-        C["EngramConsensus"]
+    subgraph Layer_1 ["Layer 1: Abstract Core"]
+        C["EngramConsensus.tla<br>(Engine)"]
     end
 
-    subgraph Tang_2 ["Tang 2: Tầng Dịch & Điều phối"]
-        S["EngramServer"]
+    subgraph Layer_2 ["Layer 2: Refinement and Coordination"]
+        S["EngramServer.tla<br>(Central CU)"]
     end
 
-    subgraph Tang_3 ["Tầng 3: Thực thi & Ngoại biên"]
-        FSM["EngramFSM<br>Cảm biến trạng thái"]
-        TM["EngramTendermint<br>Lõi đồng thuận BFT"]
+    subgraph Layer_3 ["Layer 3: Network and Peripheral Implementation"]
+        TM["EngramTendermint.tla<br>(Transmission)"]
+        FSM["EngramFSM.tla<br>(Emergency Brake and <br>Sensors - ABS)"]
     end
 
-    C <-- "Ánh xạ chứng chỉ (QC/TC)" --> S
-    S --> FSM
-    S --> TM
-
-    FSM -. "Tích hợp sắp tới: Nhúng btc_gap/da_gap vào Proposal" .-> TM
+    FSM -- "Monitors BTC/DA<br>Triggers Circuit Breaker" --> TM
+    TM -- "Generates Network Messages<br>(Proposal, Prevote, <br>Precommit)" --> S
+    S -- "Translates into Atomic <br>Functions <br>(Pull, Invoke, Push)" --> C
 ```
 
 
