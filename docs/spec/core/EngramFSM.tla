@@ -4,8 +4,6 @@ EXTENDS Integers, EngramVars
 CONSTANTS 
     T_SUSPICIOUS,                   \* Warning delay threshold (Gray Failure)
     T_SOVEREIGN,                    \* Sovereign partition threshold (Hard Failure)
-    T_DA,                           \* Block gap since the last DA publication verification
-    HYSTERESIS_WAIT,                \* Consecutive safe blocks required for successful recovery
     MIN_PEERS                       \* Minimum peers required to prevent isolation
 
 
@@ -17,7 +15,6 @@ ASSUME
     /\ MIN_PEERS \in Nat
     /\ T_SUSPICIOUS < T_SOVEREIGN
 
-
 -----------------------------------------------------------------------------
 \* CALCULATE DYNAMIC GAPS
 -----------------------------------------------------------------------------
@@ -27,7 +24,7 @@ MinVal(a, b) == IF a < b THEN a ELSE b
 btc_gap == h_btc_current - MinVal(h_btc_submitted, h_btc_anchored)
 
 \* Data Availability layer verification gap
-da_gap == h_da_local - h_da_verified
+da_gap == h_engram_current - h_engram_verified
 
 \* -----------------------------------------------------------------------------
 \* MACROS & DERIVED VARIABLES
@@ -77,8 +74,8 @@ FSM_Init ==
     /\ h_btc_current = 0 
     /\ h_btc_submitted = 0 
     /\ h_btc_anchored = 0 
-    /\ h_da_local = 0 
-    /\ h_da_verified = 0 
+    /\ h_engram_current = 0 
+    /\ h_engram_verified = 0 
     /\ is_das_failed = FALSE 
     /\ peer_count = MIN_PEERS + 1 
     /\ safe_blocks = 0 
@@ -91,14 +88,21 @@ UpdateSensors ==
     /\ h_btc_submitted' \in {h_btc_submitted, h_btc_current'}
     /\ h_btc_anchored' \in {h_btc_anchored, h_btc_submitted'}
     
-    /\ h_da_local' \in {h_da_local, h_da_local + 1}
-    /\ h_da_verified' \in {h_da_verified, h_da_local'}
+    /\ h_engram_current' \in {h_engram_current, h_engram_current + 1}
+    /\ h_engram_verified' \in {h_engram_verified, h_engram_current'}
+
+    \* ZK proof is only valid when the Bitcoin anchor point is confirmed (anchored)
+    \* catches up with or exceeds the proof submission time.
+    /\ reanchoring_proof_valid' = 
+          IF state = "RECOVERING" /\ h_btc_anchored' >= h_btc_submitted' /\ h_btc_submitted' > 0
+          THEN TRUE 
+          ELSE FALSE
     
     \* Random external environmental variables
     /\ is_das_failed' \in BOOLEAN
-    /\ reanchoring_proof_valid' \in BOOLEAN
     /\ peer_count' \in 0..(MIN_PEERS * 2)
-    
+
+    \* Keep core FSM states unchanged during sensor updates
     /\ UNCHANGED <<state, safe_blocks>>
 
 
@@ -108,24 +112,28 @@ AnchoredToSuspicious ==
     /\ IsWarningCondition
     /\ ~IsCriticalCondition
     /\ state' = "SUSPICIOUS"
+    /\ UNCHANGED <<envVars>>
     /\ UNCHANGED <<safe_blocks>>
 
 SuspiciousToSovereign == 
     /\ state = "SUSPICIOUS"
     /\ IsCriticalCondition
     /\ state' = "SOVEREIGN"
+    /\ UNCHANGED <<envVars>>
     /\ UNCHANGED <<safe_blocks>>
 
 AnchoredToSovereign == 
     /\ state = "ANCHORED"
     /\ IsCriticalCondition
     /\ state' = "SOVEREIGN"
+    /\ UNCHANGED <<envVars>>
     /\ UNCHANGED <<safe_blocks>>
 
 SuspiciousToAnchored == 
     /\ state = "SUSPICIOUS"
     /\ IsHealthyCondition
     /\ state' = "ANCHORED"
+    /\ UNCHANGED <<envVars>>
     /\ UNCHANGED <<safe_blocks>>
 
 SovereignToRecovering == 
@@ -133,12 +141,15 @@ SovereignToRecovering ==
     /\ IsHealthyCondition
     /\ state' = "RECOVERING"
     /\ safe_blocks' = 0
+    /\ UNCHANGED <<envVars>>
+
 
 RecoveringProgress == 
     /\ state = "RECOVERING"
     /\ IsHealthyCondition
     /\ safe_blocks < HYSTERESIS_WAIT
     /\ safe_blocks' = safe_blocks + 1
+    /\ UNCHANGED <<envVars>>
     /\ UNCHANGED <<state>>
 
 RecoveringToAnchored == 
@@ -148,6 +159,9 @@ RecoveringToAnchored ==
     /\ reanchoring_proof_valid = TRUE
     /\ state' = "ANCHORED"
     /\ safe_blocks' = 0
+    /\ reanchoring_proof_valid' = FALSE
+    /\ UNCHANGED <<h_engram_current, h_engram_verified, h_btc_current, h_btc_submitted, h_btc_anchored, peer_count, is_das_failed>>
+
 
 RecoveringToSuspicious == 
     /\ state = "RECOVERING"
@@ -155,33 +169,37 @@ RecoveringToSuspicious ==
     /\ ~IsCriticalCondition
     /\ state' = "SUSPICIOUS"
     /\ safe_blocks' = 0
+    /\ UNCHANGED <<envVars>>
+
 
 RecoveringToSovereign == 
     /\ state = "RECOVERING"
     /\ IsCriticalCondition
     /\ state' = "SOVEREIGN"
     /\ safe_blocks' = 0
+    /\ UNCHANGED <<envVars>>
+
 
 FSM_Transition == 
     \/ AnchoredToSuspicious \/ SuspiciousToSovereign \/ AnchoredToSovereign 
     \/ SuspiciousToAnchored \/ SovereignToRecovering \/ RecoveringProgress 
     \/ RecoveringToAnchored \/ RecoveringToSuspicious \/ RecoveringToSovereign
 
-FSM_Next == UpdateSensors \/ (FSM_Transition /\ UNCHANGED envVars)
+FSM_Next == UpdateSensors \/ FSM_Transition
 
 
 FSM_Fairness == 
-    /\ WF_fsmVars(AnchoredToSuspicious /\ UNCHANGED envVars)
-    /\ WF_fsmVars(SuspiciousToSovereign /\ UNCHANGED envVars)
-    /\ WF_fsmVars(AnchoredToSovereign /\ UNCHANGED envVars)
-    /\ WF_fsmVars(SuspiciousToAnchored /\ UNCHANGED envVars)
-    /\ WF_fsmVars(SovereignToRecovering /\ UNCHANGED envVars)
-    /\ WF_fsmVars(RecoveringProgress /\ UNCHANGED envVars)
-    /\ WF_fsmVars(RecoveringToAnchored /\ UNCHANGED envVars)
-    /\ WF_fsmVars(RecoveringToSuspicious /\ UNCHANGED envVars)
-    /\ WF_fsmVars(RecoveringToSovereign /\ UNCHANGED envVars)
+    /\ WF_fsmVars(AnchoredToSuspicious)
+    /\ WF_fsmVars(SuspiciousToSovereign)
+    /\ WF_fsmVars(AnchoredToSovereign)
+    /\ WF_fsmVars(SuspiciousToAnchored)
+    /\ WF_fsmVars(SovereignToRecovering)
+    /\ WF_fsmVars(RecoveringProgress)
+    /\ WF_fsmVars(RecoveringToAnchored)
+    /\ WF_fsmVars(RecoveringToSuspicious)
+    /\ WF_fsmVars(RecoveringToSovereign)
 
-Spec == FSM_Init /\ [][FSM_Next]_fsmVars /\ FSM_Fairness
+FSM_Spec == FSM_Init /\ [][FSM_Next]_fsmVars /\ FSM_Fairness
 
 
 \* -----------------------------------------------------------------------------

@@ -39,7 +39,7 @@ Init ==
     /\ tree = {} 
     /\ local_times = [n \in Nodes |-> 0] 
     /\ round = 1        
-    /\ rem_time = 0
+    /\ rem_time = ResetTime
     /\ fsm_state = "ANCHORED"
     /\ h_btc_current = 2
     /\ h_btc_anchored = 2
@@ -75,13 +75,13 @@ active(tr, s) ==
 
 \* K-Deep Finality Rule
 IsKDeep(c, k) == 
-    /\ c.btc_height <= h_btc_anchored     \* 1. Điểm neo của block này chưa bị mất do Reorg
-    /\ h_btc_current - c.btc_height >= k  \* 2. Độ sâu trên chuỗi Bitcoin đạt mức an toàn k
+    /\ c.btc_height <= h_btc_anchored     \* The anchor point of this block has not been lost due to Reorg.
+    /\ h_btc_current - c.btc_height >= k  \* Bitcoin's on-chain depth has reached a safe level.
 
 
 \* Simplify: The branch with the largest total stake is based on the number of voters.
 IsMaxStakeBranch(c) == 
-    \/ c.c_round = 0  \* Ngoại lệ luôn hợp lệ cho Genesis block
+    \/ c.c_round = 0  \* Exceptions are always valid for Genesis blocks
     \/ SumStake[c.voters] >= TotalStake \div 2
 
 canElect(tr, c, Q, state_fsm) == 
@@ -153,17 +153,18 @@ Push(n) ==
 (********************* OPTIMIZED ENVIRONMENT ******************)
 UpdateEnv == 
     /\ h_btc_current' \in {h_btc_current, h_btc_current + 1}
-    /\ h_btc_anchored' \in h_btc_anchored..h_btc_current'  \* Cho phép h_btc_anchored bắt kịp thoải mái
+    /\ h_btc_anchored' \in h_btc_anchored..h_btc_current'  \* Allow h_btc_anchored to catch up comfortably
     /\ fsm_state' = fsm_state  
     /\ UNCHANGED <<tree, local_times, round, rem_time>>
 
-\* BỔ SUNG ACTION NÀY: Phản xạ các bước chuyển trạng thái (như SOVEREIGN) từ FSM
+
 FSMStateChange ==
     /\ fsm_state' \in {"ANCHORED", "SOVEREIGN"}
     /\ fsm_state' /= fsm_state
     /\ UNCHANGED <<tree, local_times, round, rem_time, h_btc_current, h_btc_anchored>>
 
-\* Mô phỏng Bitcoin Reorg làm mất giao dịch OP_RETURN
+
+\* Bitcoin Reorg simulation loses OP_RETURN transaction
 BitcoinReorg == 
     /\ h_btc_anchored > 0  
     /\ h_btc_current' \in {h_btc_current, h_btc_current + 1} 
