@@ -603,9 +603,6 @@ UponProposalInPrecommitNoDecision(p) ==
 
 
                     
-\* the actions below are not essential for safety, but added for completeness
-
-
 
 \* @type: (PROCESS) => Bool;
 OnTimeoutPropose(p) ==
@@ -673,6 +670,7 @@ OnLocalTimerExpire(p) ==
     /\ UNCHANGED <<coreVars, temporalVars, fsmVars, invariantVars, censorVars>>
     /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit, evidence, receivedTimelyProposal, inspectedProposal>>
     /\ action' = "OnLocalTimerExpire"
+
 
 (********************* PROTOCOL TRANSITIONS ******************************)
 \* advance the global clock

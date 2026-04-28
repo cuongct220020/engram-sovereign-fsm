@@ -45,7 +45,10 @@ Server_InsertProposal(p) ==
                                        method       |-> "None", 
                                        btc_height   |-> h_btc_current ]
                        IN qcs' = qcs \cup {NewEQC}
-    /\ UNCHANGED <<tcs, fsmVars>> 
+    /\ UNCHANGED <<tcs, fsmVars, censorVars>>
+    /\ UNCHANGED <<coreVars, temporalVars>>
+    /\ UNCHANGED <<msgsPrevote, msgsPrecommit, msgsTimeout, evidence, receivedTimelyProposal, inspectedProposal>>
+    /\ action' = "Server_InsertProposal"
 
 
 \* Hook 2: Proposer votes for its own proposal -> Create M_QC (Maps to Abstract Invoke)
@@ -59,10 +62,10 @@ Server_ProposerVotes(p) ==
                            caller     |-> p, 
                            method     |-> prop.value, 
                            btc_height |-> h_btc_current ] 
-           IN qcs' = qcs \cup {NewMQC} 
+           IN qcs' = qcs \cup {NewMQC} /\ tcs' = tcs
        ELSE
-           qcs' = qcs
-    /\ UNCHANGED <<tcs, fsmVars>>
+           qcs' = qcs /\ tcs' = tcs
+    /\ action' = "Server_ProposerVotes"
 
 
 \* Hook 3: Intercept the decision moment to trigger FSM recovery and State Sync
@@ -99,8 +102,9 @@ Server_UponProposalInPrecommitNoDecision(p) ==
              
           /\ UNCHANGED <<safe_blocks, peer_count>>
                  
-    \* 4. Keep Abstract Pacemaker state unchanged
-    /\ UNCHANGED <<qcs, tcs>>
+    \* 4. Keep Abstract Pacemaker state & censor sensor unchanged
+    /\ UNCHANGED <<qcs, tcs, censorVars>>
+    /\ action' = "Server_UponProposalInPrecommitNoDecision"
 
 
 \* Hook 4: Intercept the moment a Quorum of Timeouts is reached to create T_QC
@@ -122,9 +126,13 @@ Server_UponTimeoutCert(p) ==
        ]
        IN tcs' = tcs \cup {NewTQC}
        
-    /\ UNCHANGED <<qcs, fsmVars>>
+    /\ UNCHANGED <<qcs, fsmVars>>    
+    /\ UNCHANGED <<forced_tx_queue>>
+    /\ UNCHANGED <<localClock, realTime>>    
+    /\ UNCHANGED <<endConsensus, proposalTime, proposalReceivedTime>>    
+    /\ UNCHANGED <<decision, lockedValue, lockedRound, validValue, validRound>>    
     /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit, msgsTimeout, evidence, receivedTimelyProposal, inspectedProposal>>
-    /\ UNCHANGED <<decision, lockedValue, lockedRound, validValue, validRound, endConsensus, proposalTime, proposalReceivedTime>>
+    /\ action' = "Server_UponTimeoutCert"
 
 
 \* Bridge all other Tendermint actions as Pass-Through
@@ -166,7 +174,6 @@ Server_Next ==
        /\ \E p \in Corr: Server_MessageProcessing(p)
     \/ FSM_Next /\ UNCHANGED <<coreVars, temporalVars, invariantVars, bookkeepingVars, censorVars, action, qcs, tcs>>
     \/ Server_Byzantine_Data_Withholding
-
 Server_Spec == Server_Init /\ [][Server_Next]_serverVars
 
 
