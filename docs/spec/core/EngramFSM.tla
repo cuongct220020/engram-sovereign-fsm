@@ -98,6 +98,7 @@ UpdateSensors ==
 
     \* Keep core FSM states unchanged during sensor updates
     /\ UNCHANGED <<state, safe_blocks>>
+    /\ UNCHANGED <<censorVars>>
 
 
 \* FSM state transitions based on sensor data
@@ -154,7 +155,7 @@ RecoveringToAnchored ==
     /\ state' = "ANCHORED"
     /\ safe_blocks' = 0
     /\ reanchoring_proof_valid' = FALSE
-    /\ UNCHANGED <<h_engram_current, h_engram_verified, h_btc_current, h_btc_submitted, h_btc_anchored, peer_count, is_das_failed>>
+    /\ UNCHANGED <<btcSensorVars, daSensorVars, p2pSensorVars>>
 
 
 RecoveringToSuspicious == 

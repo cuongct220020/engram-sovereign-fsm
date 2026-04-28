@@ -35,15 +35,26 @@ invariantVars == <<beginRound, endConsensus, lastBeginRound, proposalTime, propo
 
 (* ======================== FSM & ENVIRONMENT VARIABLES ======================== *)
 VARIABLES 
-    state, h_btc_current, h_btc_submitted, h_btc_anchored, 
-    h_engram_current, h_engram_verified, is_das_failed, peer_count, 
-    safe_blocks, reanchoring_proof_valid
+    state, 
+    h_btc_current, h_btc_submitted, h_btc_anchored, 
+    h_engram_current, h_engram_verified, is_das_failed, 
+    peer_count, 
+    safe_blocks, reanchoring_proof_valid,
+    forced_tx_queue, tx_ignored_rounds
+
+btcSensorVars == <<h_btc_current, h_btc_submitted, h_btc_anchored>>
+
+daSensorVars == <<h_engram_current, h_engram_verified, is_das_failed>>
+
+p2pSensorVars == <<peer_count>>
+
+censorVars == <<forced_tx_queue, tx_ignored_rounds>>
 
 \* Definition for EngramTendermint to use
-fsmVars == <<state, h_btc_current, h_btc_submitted, h_btc_anchored, h_engram_current, h_engram_verified, is_das_failed, peer_count, safe_blocks, reanchoring_proof_valid>>
+fsmVars == <<state, btcSensorVars, daSensorVars, p2pSensorVars, safe_blocks, reanchoring_proof_valid>>
 
 \* Definition for EngramFSM to use
-envVars == <<h_engram_current, h_engram_verified, h_btc_current, h_btc_submitted, h_btc_anchored, peer_count, reanchoring_proof_valid, is_das_failed>>
+envVars == <<btcSensorVars, daSensorVars, p2pSensorVars, censorVars, reanchoring_proof_valid>>
 
 
 (* ======================== SERVER & TENDERMINT TUPLES ======================== *)
@@ -51,8 +62,8 @@ VARIABLES
     qcs, tcs
 
 \* Standard tuple used for EngramTendermint (called in UNCHANGED vars, WF_vars rows)
-tendermintVars == <<coreVars, temporalVars, bookkeepingVars, action, invariantVars, fsmVars>>
+tendermintVars == <<coreVars, temporalVars, bookkeepingVars, action, invariantVars, fsmVars, censorVars>>
 
 \* Tuple used for EngramServer
-serverVars == <<coreVars, temporalVars, invariantVars, bookkeepingVars, action, qcs, tcs, fsmVars>>
+serverVars == <<coreVars, temporalVars, invariantVars, bookkeepingVars, action, qcs, tcs, fsmVars, censorVars>>
 =========================================================================
