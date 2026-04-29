@@ -22,14 +22,15 @@
     - [4.2 Data Availability Gap Sensor](#42-data-availability-gap-sensor)
       - [Data Availability Sampling (DAS)](#data-availability-sampling-das)
     - [4.3 P2P Health Sensor](#43-p2p-health-sensor)
-  - [5. State Transition Conditions](#5-state-transition-conditions)
-    - [Warning Condition](#warning-condition)
-    - [Critical Condition](#critical-condition)
-    - [Healthy Condition](#healthy-condition)
-  - [6. State Transition Logic](#6-state-transition-logic)
-    - [6.1 Transition Definitions](#61-transition-definitions)
-    - [6.2 Re-anchoring via Recursive ZK-Proof](#62-re-anchoring-via-recursive-zk-proof)
-    - [6.3 Hysteresis Mechanism](#63-hysteresis-mechanism)
+  - [5. State Transition](#5-state-transition)
+    - [5.1 State Transition Conditions](#51-steate-transition-conditions)
+      - [Warning Condition](#warning-condition)
+      - [Critical Condition](#critical-condition)
+      - [Healthy Condition](#healthy-condition)
+    - [5.2 State Transition Logic](#52-state-transition-logic)
+      - [Transition Definitions](#transition-definitions)
+      - [Re-anchoring via Recursive ZK-Proof](#re-anchoring-via-recursive-zk-proof)
+      - [Hysteresis Mechanism](#hysteresis-mechanism)
   - [7. Consensus Protocol: Hybrid Adaptive Tendermint with Extended Proposal](#7-consensus-protocol-hybrid-adaptive-tendermint-with-extended-proposal)
   - [8. Security and Safety Analysis](#8-security-and-safety-analysis)
     - [8.1 State Invariants](#81-state-invariants)
@@ -295,13 +296,15 @@ The boolean `is_das_failed` is set to TRUE if any sampling check fails within th
 The number of active peer connections, `peer_count`, is monitored continuously. The requirement $P \geq P_{\min}$ as a precondition for the healthy state prevents an isolated node from triggering recovery based on a stale or adversarial sensor view.
 
 
-## 5. State Transition Conditions
+## 5. State Transition 
+
+### 5.1. Steate Transition Conditions
 
 Sensor values are composed into three composite conditions that drive state machine transitions. Sensors only **propose** a state; the actual FSM state the network operates in is determined by the consensus pipeline. A proposer embeds the target FSM state in its proposal, and validators prevote for it only if it is consistent with their own local sensor readings. This ensures that all correct nodes remain on the same FSM state without requiring a separate out-of-band coordination step.
 
 Let $P$ denote `peer_count` and $P_{\min}$ denote `MIN_PEERS`.
 
-### Warning Condition
+#### Warning Condition
 
 Indicates that one or more peripheral layers are operating outside normal parameters, but the situation is not yet critical. Triggers a transition toward degraded states.
 
@@ -315,13 +318,13 @@ $$
 \end{aligned}
 $$ 
 
-### Critical Condition
+#### Critical Condition
 
 Indicates that Bitcoin settlement finality has been unavailable beyond the tolerance threshold. Triggers the circuit breaker.
 
 $$\text{IsCriticalCondition} \triangleq \Delta H_{\text{BTC}} \geq T_{\text{Sovereign}}$$
 
-### Healthy Condition
+#### Healthy Condition
 
 All peripheral layers are operating within normal parameters. Required as a precondition for initiating or progressing through recovery.
 
@@ -340,13 +343,13 @@ $$
 The $P \geq P_{\min}$ requirement is an Eclipse Attack defense: an isolated node must not be able to declare the network healthy and unilaterally trigger recovery when the honest majority is unreachable.
 
 
-## 6. State Transition Logic
+### 5.2. State Transition Logic
 
 > **Note for future revision.** The transition definitions below represent the current formal specification. The interactions between RECOVERING and concurrent network partitions (RecoveringToSuspicious, RecoveringToSovereign) are acknowledged as candidates for refinement as the protocol matures. These transitions are isolated in Section 6.1 to make future adjustments straightforward.
 
 All transitions require greater than 2/3 quorum agreement through the consensus pipeline before taking effect.
 
-### 6.1 Transition Definitions
+#### Transition Definitions
 
 The transitions are grouped by source state for clarity. Each transition definition is expressed as a TLA+ predicate over the current system state.
 
@@ -427,7 +430,7 @@ $$
 \end{aligned}
 $$
 
-### 6.2 Re-anchoring via Recursive ZK-Proof
+#### Re-anchoring via Recursive ZK-Proof
 
 Blocks produced in `SOVEREIGN` mode are secured only by local PoS and are not yet Bitcoin-anchored. To restore Bitcoin-grade finality, these blocks must be reconciled with the Bitcoin-anchored history without requiring re-execution of each sovereign block individually.
 
@@ -437,7 +440,7 @@ $$V(S_{\text{last}}, S_{\text{new}}, \pi_{\text{RA}}) = 1, \quad\text{where} S_{
 
 A single recursive SNARK (Plonk proving system, Poseidon2 hash) aggregates all sovereign transitions into one constant-size proof, allowing $O(1)$ verification on the settlement layer regardless of the number of sovereign blocks produced.
 
-### 6.3 Hysteresis Mechanism
+#### Hysteresis Mechanism
 
 The `safe_blocks` counter prevents state oscillation. On entry into RECOVERING, the counter is reset to zero. Each block for which `IsHealthyCondition` holds increments the counter by one. The transition to ANCHORED is blocked until `safe_blocks = HYSTERESIS_WAIT`. Any deterioration resets the counter to zero and the process restarts.
 
