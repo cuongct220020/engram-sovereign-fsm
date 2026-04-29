@@ -1,6 +1,6 @@
 # Formal Specification and Verification of the Engram Hybrid Adaptive Consensus: FSM with Sovereign Fallback
 
-- [Formal Specification and Verification of the Engram Hybrid Adaptive Consensus: FSM with Sovereign Fallback](#formal-specification-and-verification-of-the-engram-hybrid-adaptive-consensus-fsm-with-sovereign-fallback)
+## Table of contents
   - [Abstract](#abstract)
   - [1. Problem Statement](#1-problem-statement)
     - [1.1 Structural Liveness Risk in Modular Blockchains](#11-structural-liveness-risk-in-modular-blockchains)
