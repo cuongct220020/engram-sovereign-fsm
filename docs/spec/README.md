@@ -277,7 +277,7 @@ This sensor measures the lag between the current Engram chain head and the last 
 $$\Delta H_{\text{DA}} = H_{\text{local}} - H_{\text{verified}}$$
 
 - $H_{\text{local}}$: current Engram-app chain block height.
-- $H_{\text{verified}}$: highest Engram block height for which a valid DA commitment attestation has been received.
+- $H_{\text{verified}}$: highest Engram-app chain block height for which a valid DA commitment attestation has been received.
 
 #### Data Availability Sampling (DAS)
 
