@@ -7,7 +7,9 @@
     - [1.2 The Missing Dimension: Peripheral Network Health in Consensus](#12-the-missing-dimension-peripheral-network-health-in-consensus)
   - [2. Proposed Solution: Hybrid Adaptive Consensus with Sovereign Fallback](#2-proposed-solution-hybrid-adaptive-consensus-with-sovereign-fallback)
     - [2.1 Core Idea](#21-core-idea)
-    - [2.2 FSM States](#22-fsm-states)
+    - [2.2 Finite State Machine](#22-finite-state-machine)
+      - [FSM States](#fsm-states)
+      - [State Comparison Summary](#state-comparison-summary)
       - [State Machine Diagram](#state-machine-diagram)
     - [2.3 Key Design Properties](#23-key-design-properties)
   - [3. Methodology: Formal Verification via Refinement Mapping](#3-methodology-formal-verification-via-refinement-mapping)
@@ -105,7 +107,18 @@ The protocol maintains a four-state FSM that degrades gracefully across security
 
 Critically, the consensus object is extended: a valid proposal is no longer merely a transaction batch; it is a tuple `[transactions, fsm_state, da_receipt, btc_anchored, zk_proof_ref]`. A validator will only issue a `Prevote` for a proposal if all peripheral components strictly match its own local sensor readings, effectively establishing Byzantine-fault-tolerant agreement on the health of the entire modular stack.
 
-### 2.2 FSM States
+### 2.2 Finite State Machine
+
+#### FSM States
+
+The FSM governs four states:
+ 
+- **ANCHORED**: Normal operation. Bitcoin-secured via Babylon checkpointing; DA confirmed via Celestia/Blobstream.
+- **SUSPICIOUS**: Early warning. Warning conditions detected — restricts high-risk transactions and prioritizes critical operations.
+- **SOVEREIGN**: Active partition. Local PoS activated; Circuit Breaker halts all cross-chain withdrawals.
+- **RECOVERING**: Resolution. Connectivity restored; aggregates all Sovereign transitions into a single recursive ZK-Proof to re-anchor to Bitcoin.
+
+### State Comparison Summary
 
 | State | Incident Phase | Security Basis | Withdrawals | Throughput | Finality |
 |---|---|---|---|---|---|
