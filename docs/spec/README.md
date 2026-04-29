@@ -476,7 +476,7 @@ stateDiagram-v2
     PrevoteBlock --> Polka: Broadcast prevote(block)<br> Collect +2/3 prevotes
     PrevoteNil --> NilPolka: Broadcast prevote(nil)<br> Collect +2/3 nil prevotes
 
-    Polka --> Precommit: Lock block<br> (update lockedBlock, lockedRound)
+    Polka --> Precommit: Lock block<br> (update lockedBlock, <br>lockedRound)
     NilPolka --> Precommit: No lock<br> move forward
 
     Precommit --> Commit: +2/3 precommits<br> for same block — FINALIZE
