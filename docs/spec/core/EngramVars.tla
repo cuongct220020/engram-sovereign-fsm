@@ -38,7 +38,7 @@ VARIABLES
     state, 
     h_btc_current, h_btc_submitted, h_btc_anchored, 
     h_engram_current, h_engram_verified, is_das_failed, 
-    peer_count, 
+    active_peers, anchor_peers, blacklisted_peers,
     safe_blocks, reanchoring_proof_valid,
     forced_tx_queue, tx_ignored_rounds
 
@@ -46,7 +46,7 @@ btcSensorVars == <<h_btc_current, h_btc_submitted, h_btc_anchored>>
 
 daSensorVars == <<h_engram_current, h_engram_verified, is_das_failed>>
 
-p2pSensorVars == <<peer_count>>
+p2pSensorVars == <<active_peers, anchor_peers, blacklisted_peers>>
 
 censorVars == <<forced_tx_queue, tx_ignored_rounds>>
 

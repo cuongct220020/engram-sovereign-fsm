@@ -1,10 +1,12 @@
 --------------------------- MODULE EngramFSM ---------------------------
-EXTENDS Integers, EngramVars
+EXTENDS Integers, FiniteSets, EngramVars
 
 CONSTANTS 
     T_SUSPICIOUS,                   \* Warning delay threshold (Gray Failure)
     T_SOVEREIGN,                    \* Sovereign partition threshold (Hard Failure)
-    MIN_PEERS                       \* Minimum peers required to prevent isolation
+    MIN_PEERS,                       \* Minimum peers required to prevent isolation
+    MIN_SUBNET_DIVERSITY,
+    MIN_ANCHOR_PEERS
 
 
 ASSUME 
@@ -13,6 +15,8 @@ ASSUME
     /\ T_DA \in Nat 
     /\ HYSTERESIS_WAIT \in Nat  
     /\ MIN_PEERS \in Nat
+    /\ MIN_SUBNET_DIVERSITY \in Nat
+    /\ MIN_ANCHOR_PEERS \in Nat
     /\ T_SUSPICIOUS < T_SOVEREIGN
 
 
@@ -26,8 +30,34 @@ btc_gap == h_btc_current - MinVal(h_btc_submitted, h_btc_anchored)
 da_gap == h_engram_current - h_engram_verified
 
 
+(************************ P2P QUALITY SENSOR *********************)
+\* Map virtual IPs to network ranges (subnets /24) so that TLC can compute SubnetDiversity
+SubnetOf(p) == 
+    CASE p = "Anchor_1" -> "Subnet_A"
+      [] p = "Anchor_2" -> "Subnet_B"
+      [] p = "Anchor_3" -> "Subnet_C"
+      [] p \in {"Sybil_1", "Sybil_2", "Sybil_3"} -> "Subnet_Malicious" \* Sybil nodes are typically located within the same IP range
+      [] OTHER -> "Unknown_Subnet"
+
+\* 1. Assessing Subnet Diversity
+SubnetDiversity == Cardinality({SubnetOf(p) : p \in active_peers})
+
+\* 2. Anchor Health Assessment
+ActiveAnchors == active_peers \intersect anchor_peers
+
+\* 3. Evaluate the clean peer rate (Route table poisoning prevention)
+CleanPeers == active_peers \ blacklisted_peers
+
+
+IsP2PQualityHealthy == 
+    /\ SubnetDiversity >= MIN_SUBNET_DIVERSITY          \* The network is not concentrated on a single IP block.
+    /\ Cardinality(ActiveAnchors) >= MIN_ANCHOR_PEERS   \* Maintains connection with root nodes
+    /\ Cardinality(CleanPeers) >= MIN_PEERS             \* Sufficient number of nodes with no malicious behavior
+
+
 (************************ MACROS & DERIVED VARIABLES *********************)
 WithdrawLocked == state \in {"SOVEREIGN", "RECOVERING"}
+
 
 IsDAHealthy == (da_gap < T_DA) /\ ~is_das_failed
 
@@ -36,15 +66,15 @@ IsCriticalCondition == btc_gap >= T_SOVEREIGN
 
 \* Warning conditions for unstable network or risks
 IsWarningCondition == 
-    \/ (btc_gap >= T_SUSPICIOUS /\ btc_gap < T_SOVEREIGN)
+    \/ (T_Suspicious <= btc_gap /\ btc_gap < T_Sovereign)
     \/ ~IsDAHealthy
-    \/ peer_count < MIN_PEERS
+    \/ ~IsP2PQualityHealthy
 
 \* Completely healthy network conditions
 IsHealthyCondition == 
     /\ btc_gap < T_SUSPICIOUS
     /\ IsDAHealthy
-    /\ peer_count >= MIN_PEERS
+    /\ IsP2PQualityHealthy
 
 
 (************************ TYPE INVARIANT & SANITY CHECK *********************)
@@ -53,7 +83,9 @@ TypeInvariant ==
     /\ btc_gap >= 0
     /\ da_gap >= 0
     /\ is_das_failed \in BOOLEAN
-    /\ peer_count \in 0..(MIN_PEERS * 2)
+    /\ IsFiniteSet(active_peers)
+    /\ IsFiniteSet(anchor_peers)
+    /\ IsFiniteSet(blacklisted_peers)
     /\ safe_blocks \in 0..HYSTERESIS_WAIT
     /\ reanchoring_proof_valid \in BOOLEAN
 
@@ -63,15 +95,17 @@ SanityCheck == state /= "RECOVERING"
 
 (************************ STATE MACHINE INITIALIZATION *********************)
 FSM_Init == 
-    /\ state = "ANCHORED" 
-    /\ h_btc_current = 0 
-    /\ h_btc_submitted = 0 
-    /\ h_btc_anchored = 0 
-    /\ h_engram_current = 0 
-    /\ h_engram_verified = 0 
-    /\ is_das_failed = FALSE 
-    /\ peer_count = MIN_PEERS + 1 
-    /\ safe_blocks = 0 
+    /\ state = "ANCHORED"
+    /\ h_btc_current = 0
+    /\ h_btc_submitted = 0
+    /\ h_btc_anchored = 0
+    /\ h_engram_current = 0
+    /\ h_engram_verified = 0
+    /\ is_das_failed = FALSE
+    /\ anchor_peers = {"anchor_n1", "anchor_n2", "anchor_n3"}
+    /\ active_peers = anchor_peers
+    /\ blacklisted_peers = {}
+    /\ safe_blocks = 0
     /\ reanchoring_proof_valid = FALSE
 
 (************************ ENVIRONMENT SENSORS UPDATE *********************)
@@ -94,7 +128,21 @@ UpdateSensors ==
     
     \* Random external environmental variables
     /\ is_das_failed' \in BOOLEAN
-    /\ peer_count' \in 0..(MIN_PEERS * 2)
+    
+    \* Abstract the network into 4 adversarial/normal scenarios to avoid state space explosion
+    /\ \* Scenario 1: Healthy network - Fully connected to anchor peers, no malicious traffic
+        /\ active_peers' = anchor_peers
+        /\ blacklisted_peers' = {}
+    \/ \* Scenario 2: Under Eclipse Attack - Connection slots filled with Sybil nodes, loss of anchor connectivity
+        /\ active_peers' = {"sybil_n1", "sybil_n2", "sybil_n3"}
+        /\ blacklisted_peers' = {"sybil_n1"}    \* Detection mechanism starts identifying some and adds them to the blacklist
+    \/ \* Scenario 3: Physical network partition - Cable cut, complete loss of connectivity
+        /\ active_peers' = {}
+        /\ blacklisted_peers' = blacklisted_peers
+    \/ \* Scenario 4: No change in P2P state (Stable network)
+        /\ UNCHANGED <<active_peers, blacklisted_peers>>
+
+    /\ UNCHANGED anchor_peers \* Anchor peers are statically configured bootstrap IPs
 
     \* Keep core FSM states unchanged during sensor updates
     /\ UNCHANGED <<state, safe_blocks>>
