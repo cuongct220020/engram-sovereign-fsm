@@ -86,11 +86,11 @@ ValuesOrNil == Values \union {NilValue}
 
 (************************* ENGRAM EXTERNAL ENTITIES *************************)
 \* @type: Set(STR);
-FSMState == {"ANCHORED", "SUSPICIOUS", "SOVEREIGN", "RECOVERING"}
+FSMStates == {"ANCHORED", "SUSPICIOUS", "SOVEREIGN", "RECOVERING"}
 \* @type: STR
 NilFSMState == "NONE"
 \* @type: Set(STR);
-FSMStateOrNil == FSMState \union NilFSMState
+FSMStatesOrNil == FSMState \union NilFSMState
 
 
 \* @type: Set(Int);
@@ -99,13 +99,13 @@ BTCHeights == 0..MaxBTCHeight
 NilBTCHeight == -1
 \* @type: Set(BTC_RECEIPT);
 BTCReceipts == [ 
-    blockHeight : BTCHeights, 
-    blockHash   : STRING
+    checkpoint_block_height : BTCHeights,   \* Height of the Bitcoin block containing the OP_RETURN tx
+    checkpoint_block_hash   : STRING        \* Hash of the Bitcoin block containing the Engram Checkpoint (OP_RETURN tx)
 ]
 \* @type: BTC_RECEIPT;
 NilBTCReceipt == [ 
-    blockHeight |-> NilBTCHeight, 
-    blockHash   |-> "NilHash" 
+    checkpoint_block_height     |-> NilBTCHeight, 
+    checkpoint_block_hash       |-> "NilHash" 
 ]
 \* @type: Set(BTC_RECEIPT);
 BTCHeightsOrNil == BTCReceipts \union NilBTC_Receipt
@@ -117,13 +117,13 @@ DAHeights == 0..MaxEngramHeight
 NilDAHeights == -1
 \* @type: Set(DA_RECEIPT);
 DAReceipts == [
-    blockHeight: DAHeights,   \* Height of published block N-k
-    attestation: BOOLEAN       \* Verification from Blobstream
+    published_block_height: DAHeights,       \* Height of published block N-k
+    attestation: BOOLEAN                     \* Verification from Blobstream
 ]
 \* @type: DA_RECEIPT;
 NilDAReceipt == [
-    blockHeight  |-> -1,
-    attestation  |-> FALSE 
+    published_block_height      |-> -1,
+    attestation                 |-> FALSE 
 ]
 \* @type: Set(DA_RECEIPT);
 DAReceiptsOrNil == DA_Heights \union NilDA_Receipt
@@ -134,7 +134,7 @@ Proposals == [
     value: ValuesOrNil,
     timestamp: TimestampsOrNil,
     round: RoundsOrNil,
-    fsm_state: FSMStateOrNil,
+    fsm_state: FSMStatesOrNil,
     da_receipt: DAReceiptsOrNil,
     btc_receipt: BTCReceiptsOrNil,
     zk_proof_ref: BOOLEAN 
@@ -205,11 +205,18 @@ IsTimely(processTime, messageTime) ==
 
 
 (********************* DYNAMIC TOLERANCE CALCULATION *********************)
-\* The tolerance expands dynamically as the pacemaker's remaining time (rem_time) runs out.
-\* This guarantees Liveness: if the network is experiencing high latency, the firewall
-\* becomes slightly more forgiving to ensure consensus can be reached before a timeout.
-DYNAMIC_TOLERANCE(r_time) == 
-    IF r_time < (TimeoutDuration \div 2) THEN 2 ELSE 1
+\* The tolerance expands dynamically based on the Consensus Round.
+\* It only applies to exogenous physical metrics (DA Blobstream & Bitcoin SPV).
+DATolerance(round) ==
+    CASE round <= 1 -> 0
+      [] round = 2  -> 2
+      [] round >= 3 -> 4
+      [] OTHER  -> 0
+
+BTCTolerance(round) ==
+    CASE round <= 2 -> 0
+      [] round >= 3 -> 1
+      [] OTHER  -> 0
 
 
 (********************* TRANSACTION & ZK-PROOF HELPERS ******************************)
@@ -220,35 +227,46 @@ ContainsWithdrawal(propVal) == propVal = "TX_WITHDRAWAL"
 \* Black-box verification: O(1) time complexity simulation for ZK-Proofs
 \* @type: (PROPOSAL) => Bool;
 VerifyZkProof(prop) == 
-    /\ prop.zk_proof_ref = TRUE                         \* Leader claims proof exists
-    /\ prop.da_receipt.attestation = TRUE               \* DA layer confirms data is available
-    /\ prop.da_receipt.blockHeight > h_engram_verified  \* Check if the proof corresponds to the recovery target
+    /\ prop.zk_proof_ref = TRUE                                     \* Leader claims proof exists
+    /\ prop.da_receipt.attestation = TRUE                           \* DA layer confirms data is available
+    /\ prop.da_receipt.published_block_height > h_engram_verified   \* Check if the proof corresponds to the recovery target
 
 
 (********************* CORE PROPOSAL VALIDITY (SEMANTIC FIREWALL) ******************************)
 \* The core validity predicate for proposals
 \* @type: (PROPOSAL) => Bool;
 IsValidProposal(prop) == 
-    /\ prop.value \in ValidValues
-    /\ prop.timestamp \in MinTimestamp..MaxTimestamp
-    /\ prop.fsm_state = CalculateNextFSMState   \* Cross-check
-    
-    \* DA Pipeline Check: Data must be available and within the allowed gap
-    /\ (prop.fsm_state \in {"ANCHORED", "RECOVERING"}) => 
-        /\ prop.da_receipt.attestation = TRUE
-        /\ prop.da_receipt.blockHeight >= (h_engram_current - T_DA)
-    
-    \* Settlement Monotonicity Check: BTC anchor height cannot go backwards
-    /\ prop.btc_receipt.btc_anchored >= h_btc_anchored
-    
-    \* Economic Circuit Breaker: Halt all cross-chain withdrawals during partition
-    /\ (prop.fsm_state = "SOVEREIGN") => ~ContainsWithdrawal(prop.value)
-    
-    \* RE-ANCHORING LOGIC: Mandatory ZK-Proof when hysteresis wait is met
-    \* If not met, strict enforcement that no fake ZK-proof is attached.
-    /\ IF prop.fsm_state = "RECOVERING" /\ safe_blocks = HYSTERESIS_WAIT 
-       THEN VerifyZkProof(prop)
-       ELSE prop.zk_proof_ref = FALSE
+    LET 
+        da_tol  == DATolerance(prop.round)
+        btc_tol == BTCTolerance(prop.round)
+    IN
+        /\ prop.value \in ValidValues
+        /\ prop.timestamp \in MinTimestamp..MaxTimestamp
+        /\ prop.fsm_state = CalculateNextFSMState   \* Cross-check
+        
+        \* DA Pipeline Check: Data must be available and within the allowed gap
+        /\ (prop.fsm_state \in {"ANCHORED", "RECOVERING"}) => 
+            /\ prop.da_receipt.attestation = TRUE
+            /\ prop.da_receipt.published_block_height <= h_engram_current
+            /\ prop.da_receipt.published_block_height >= (h_engram_current - T_DA - da_tol)
+
+        
+        \* Settlement Monotonicity Check: BTC anchor height cannot go backwards
+        /\ prop.btc_receipt.checkpoint_block_height >= h_btc_anchored
+        /\ prop.btc_receipt.checkpoint_block_height >= (h_btc_current - btc_tol)
+        /\ prop.btc_receipt.checkpoint_block_height <= h_btc_current
+
+        \* Verify hash code against Bitcoin Reorg/Eclipse
+        \* /\ prop.btc_receipt.blockHash = ExpectedBlockHash(prop.btc_receipt.blockHeight)
+
+        \* Economic Circuit Breaker: Halt all cross-chain withdrawals during partition
+        /\ (prop.fsm_state = "SOVEREIGN") => ~ContainsWithdrawal(prop.value)
+        
+        \* RE-ANCHORING LOGIC: Mandatory ZK-Proof when hysteresis wait is met
+        \* If not met, strict enforcement that no fake ZK-proof is attached.
+        /\ IF prop.fsm_state = "RECOVERING" /\ safe_blocks = HYSTERESIS_WAIT 
+        THEN VerifyZkProof(prop)
+        ELSE prop.zk_proof_ref = FALSE
 
 
 (********************* SENSORS & CENSORSHIP RESISTANCE ******************************)
@@ -808,7 +826,7 @@ Byzantine_Data_Withholding ==
         \* Ensure it hasn't sent any proposals before.
         /\ msgsPropose[r] = {} 
         \* Create a valid structured proposal but intentionally hide data (attestation = FALSE)
-        /\ LET bad_da == [ blockHeight |-> 999, attestation |-> FALSE ] 
+        /\ LET bad_da == [ published_block_height |-> 999, attestation |-> FALSE ] 
                bad_prop == Proposal("TX_NORMAL", MinTimestamp, r, state, bad_da, h_btc_current, FALSE)
                bad_msg == [ type |-> "PROPOSAL", src |-> Proposer[r], round |-> r, proposal |-> bad_prop, validRound |-> NilRound ]
            IN 

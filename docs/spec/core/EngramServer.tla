@@ -23,8 +23,8 @@ Server_InsertProposal(p) ==
             target_state == CalculateNextFSMState 
 
             receipt == [
-                blockHeight     |-> h_engram_verified, 
-                attestation     |-> IsDAHealthy
+                published_block_height  |-> h_engram_verified, 
+                attestation             |-> IsDAHealthy
             ]
 
             proof_search_space == 
@@ -84,8 +84,8 @@ Server_UponProposalInPrecommitNoDecision(p) ==
             \* 3. TRIGGER FSM TRANSITION & STATE SYNC
             /\ Execute_FSM_State_Transition(prop.fsm_state)
 
-            /\ h_btc_anchored' = prop.btc_anchored
-            /\ h_engram_verified' = prop.da_receipt.blockHeight
+            /\ h_btc_anchored' = prop.btc_receipt.checkpoint_block_height
+            /\ h_engram_verified' = prop.da_receipt.published_block_height
             
             \* Note: Proof of ZK submission to Bitcoin has been acknowledged, but is not yet considered valid.
             /\ IF prop.fsm_state = "RECOVERING" /\ prop.zk_proof_ref = TRUE
@@ -97,8 +97,8 @@ Server_UponProposalInPrecommitNoDecision(p) ==
             \* Force local sensors: If the majority of the network is locked, all false alarms must be turned off.
             /\ IF prop.fsm_state = "ANCHORED" 
                 THEN 
-                    /\ h_btc_current' = prop.btc_anchored
-                    /\ h_engram_current' = prop.da_receipt.blockHeight
+                    /\ h_btc_current' = prop.btc_receipt.checkpoint_block_height
+                    /\ h_engram_current' = prop.da_receipt.published_block_height
                     /\ is_das_failed' = FALSE
                 ELSE 
                     \* If not in ANCHORED mode, leave the sensor in place and let the FSM make the decision.
@@ -198,7 +198,7 @@ DAReceiptConsistency ==
 
 \* Bitcoin anchor consistency
 BTCConsistency == 
-    \A p \in Corr: decision[p] /= NilDecision => decision[p].prop.btc_anchored = h_btc_anchored
+    \A p \in Corr: decision[p] /= NilDecision => decision[p].prop.btc_receipt.checkpoint_block_height = h_btc_anchored
 
 \* ZK Proof consistency
 ZKProofConsistency == 
