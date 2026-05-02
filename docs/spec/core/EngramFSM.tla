@@ -33,11 +33,11 @@ da_gap == h_engram_current - h_engram_verified
 (************************ P2P QUALITY SENSOR *********************)
 \* Map virtual IPs to network ranges (subnets /24) so that TLC can compute SubnetDiversity
 SubnetOf(p) == 
-    CASE p = "Anchor_1" -> "Subnet_A"
-      [] p = "Anchor_2" -> "Subnet_B"
-      [] p = "Anchor_3" -> "Subnet_C"
-      [] p \in {"Sybil_1", "Sybil_2", "Sybil_3"} -> "Subnet_Malicious" \* Sybil nodes are typically located within the same IP range
-      [] OTHER -> "Unknown_Subnet"
+    CASE p = "anchor_n1" -> "subnet_A"
+      [] p = "anchor_n2" -> "subnet_B"
+      [] p = "anchor_n3" -> "subnet_C"
+      [] p \in {"sybil_n1", "sybil_n2", "sybil_n3"} -> "subnet_malicious"   \* Sybil nodes are typically located within the same IP range
+      [] OTHER -> "unknown_subnet"
 
 \* 1. Assessing Subnet Diversity
 SubnetDiversity == Cardinality({SubnetOf(p) : p \in active_peers})

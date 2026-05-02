@@ -86,34 +86,47 @@ ValuesOrNil == Values \union {NilValue}
 
 (************************* ENGRAM EXTERNAL ENTITIES *************************)
 \* @type: Set(STR);
-FSM_State == {"ANCHORED", "SUSPICIOUS", "SOVEREIGN", "RECOVERING"}
+FSMState == {"ANCHORED", "SUSPICIOUS", "SOVEREIGN", "RECOVERING"}
 \* @type: STR
-NilFSM_State == "NONE"
+NilFSMState == "NONE"
 \* @type: Set(STR);
-FSM_StateOrNil == FSM_State \union NilFSM_State
+FSMStateOrNil == FSMState \union NilFSMState
+
 
 \* @type: Set(Int);
-BTC_Heights == 0..MaxBTCHeight
+BTCHeights == 0..MaxBTCHeight
 \* @type: Int;
 NilBTCHeight == -1
-\* @type: Set(Int);
-BTC_HeightsOrNil == BTC_Heights \union {NilBTCHeight}
+\* @type: Set(BTC_RECEIPT);
+BTCReceipts == [ 
+    blockHeight : BTCHeights, 
+    blockHash   : STRING
+]
+\* @type: BTC_RECEIPT;
+NilBTCReceipt == [ 
+    blockHeight |-> NilBTCHeight, 
+    blockHash   |-> "NilHash" 
+]
+\* @type: Set(BTC_RECEIPT);
+BTCHeightsOrNil == BTCReceipts \union NilBTC_Receipt
+
 
 \* @type: Set(Int);
-DA_Heights == 0..MaxEngramHeight
+DAHeights == 0..MaxEngramHeight
+\* @type: Int;
+NilDAHeights == -1
 \* @type: Set(DA_RECEIPT);
-DA_Receipts == [
-    blockHeight: DA_Heights,   \* Height of published block N-k
+DAReceipts == [
+    blockHeight: DAHeights,   \* Height of published block N-k
     attestation: BOOLEAN       \* Verification from Blobstream
 ]
 \* @type: DA_RECEIPT;
-NilDA_Receipt == [
+NilDAReceipt == [
     blockHeight  |-> -1,
     attestation  |-> FALSE 
 ]
-
 \* @type: Set(DA_RECEIPT);
-DA_ReceiptsOrNil == DA_Heights \union NilDA_Receipt
+DAReceiptsOrNil == DA_Heights \union NilDA_Receipt
 
 (*********************** PROPOSAL & DECISION STRUCTURE **********************)
 \* @type: Set(PROPOSAL);
@@ -121,9 +134,9 @@ Proposals == [
     value: ValuesOrNil,
     timestamp: TimestampsOrNil,
     round: RoundsOrNil,
-    fsm_state: FSM_StateOrNil,
-    da_receipt: DA_ReceiptsOrNil,
-    btc_anchored: BTC_HeightsOrNil,
+    fsm_state: FSMStateOrNil,
+    da_receipt: DAReceiptsOrNil,
+    btc_receipt: BTCReceiptsOrNil,
     zk_proof_ref: BOOLEAN 
 ]
 \* @type: PROPOSAL;
@@ -131,9 +144,9 @@ NilProposal == [
     value           |-> NilValue, 
     timestamp       |-> NilTimestamp, 
     round           |-> NilRound, 
-    fsm_state       |-> NilFSM_State, 
-    da_receipt      |-> NilDA_Receipt, 
-    btc_anchored    |-> NilBTCHeight,
+    fsm_state       |-> NilFSMState, 
+    da_receipt      |-> NilDAReceipt, 
+    btc_receipt     |-> NilBTCReceipt,
     zk_proof_ref    |-> FALSE   
 ]
 \* @type: Set(DECISION);
@@ -190,6 +203,15 @@ IsTimely(processTime, messageTime) ==
   /\ processTime >= messageTime - Precision
   /\ processTime <= messageTime + Precision + Delay
 
+
+(********************* DYNAMIC TOLERANCE CALCULATION *********************)
+\* The tolerance expands dynamically as the pacemaker's remaining time (rem_time) runs out.
+\* This guarantees Liveness: if the network is experiencing high latency, the firewall
+\* becomes slightly more forgiving to ensure consensus can be reached before a timeout.
+DYNAMIC_TOLERANCE(r_time) == 
+    IF r_time < (TimeoutDuration \div 2) THEN 2 ELSE 1
+
+
 (********************* TRANSACTION & ZK-PROOF HELPERS ******************************)
 \* Helper to identify withdrawal transactions
 \* @type: (STRING) => Bool;
@@ -217,7 +239,7 @@ IsValidProposal(prop) ==
         /\ prop.da_receipt.blockHeight >= (h_engram_current - T_DA)
     
     \* Settlement Monotonicity Check: BTC anchor height cannot go backwards
-    /\ prop.btc_anchored >= h_btc_anchored
+    /\ prop.btc_receipt.btc_anchored >= h_btc_anchored
     
     \* Economic Circuit Breaker: Halt all cross-chain withdrawals during partition
     /\ (prop.fsm_state = "SOVEREIGN") => ~ContainsWithdrawal(prop.value)
