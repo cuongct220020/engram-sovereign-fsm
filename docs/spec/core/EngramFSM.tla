@@ -159,11 +159,11 @@ UpdateDASensor ==
 
 
 \* Update P2P Health Sensor
-P2PNormalUpdate == 
-    /\ active_peers' \in SUBSET (anchor_peers \cup {"honest_n1", "honest_n2"})
-    /\ peer_churn_rate' \in 0..MAX_CHURN_RATE
-    /\ avg_peer_tenure' \in MIN_AVG_TENURE..(MIN_AVG_TENURE + 100)
-    /\ peer_latency'    \in 0..MAX_PEER_LATENCY
+P2PNormalUpdate ==
+    /\ active_peers' \in { anchor_peers, anchor_peers \cup {"honest_n1"} }
+    /\ peer_churn_rate' \in {0, MAX_CHURN_RATE}
+    /\ avg_peer_tenure' \in {MIN_AVG_TENURE, MIN_AVG_TENURE + 10}
+    /\ peer_latency'    \in {0, MAX_PEER_LATENCY}
 
 
 P2PAdversaryAttack ==
@@ -178,7 +178,7 @@ P2PAdversaryAttack ==
     \* Aggregated consequences reflected on the Holistic Monitor (Cross-interface P2P Health Sensor)
     /\ peer_churn_rate' = MAX_CHURN_RATE + 1 \* Triggers network churn alarm (Dynamic Replacement / Handover)
     /\ avg_peer_tenure' = 0 \* Triggers Sybil alarm (Adversary nodes have 0 tenure)
-    /\ peer_latency' \in 0..(MAX_PEER_LATENCY + 10) \* Simulates latency spikes caused by Relay Nodes or BGP Hijacking
+    /\ peer_latency' = MAX_PEER_LATENCY + 10  \* Simulates latency spikes caused by Relay Nodes or BGP Hijacking
 
 
 UpdateP2PHealthSensor == 

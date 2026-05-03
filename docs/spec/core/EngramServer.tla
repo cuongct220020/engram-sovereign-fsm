@@ -160,20 +160,19 @@ Server_UponProposalInPrecommitNoDecision(p) ==
 \* Hook 4: 2f+1 timeout votes -> emit T_QC (maps to Abstract Timeout) + advance round.
 Server_UponTimeoutCert(p) ==
     \* Check timeout quorum
-    /\ \E MyEvidence \in SUBSET msgs_timeout[round[p]] :
-           LET Timers == { m.src : m \in MyEvidence } IN
-           Cardinality(Timers) >= THRESHOLD2
+    /\  LET UniqueSenders == { m.src : m \in msgs_timeout[round[p]] }
+        IN Cardinality(UniqueSenders) >= THRESHOLD2
 
     \* Advance to next round
     /\ StartRound(p, round[p] + 1)
 
     \* Emit T_QC for the LiDO abstract pacemaker
-    /\ LET NewTQC == [
+    /\  LET NewTQC == [
                type         |-> "T_QC",
                round        |-> round[p],
                caller       |-> p,
                btc_anchored |-> h_btc_current ]
-       IN tcs' = tcs \cup {NewTQC}
+        IN tcs' = tcs \cup {NewTQC}
 
     /\ UNCHANGED <<qcs, fsmVars>>
     /\ UNCHANGED <<forced_tx_queue>>

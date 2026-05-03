@@ -647,19 +647,19 @@ UponProposalInPrevoteOrCommitAndPrevote(p) ==
 \* @type: (PROCESS) => Bool;
 UponQuorumOfPrecommitsAny(p) ==
     /\ \E MyEvidence \in SUBSET msgs_precommit[round[p]] :
-           LET Committers == { m.src : m \in MyEvidence } IN
-           /\ Cardinality(Committers) >= THRESHOLD2
-           /\ evidence' = MyEvidence \union evidence
-           /\ round[p] + 1 \in Rounds
-           /\ StartRound(p, round[p] + 1)
-           /\ UNCHANGED <<local_clock, real_time>>
-           /\ UNCHANGED <<fsmVars>>
-           /\ UNCHANGED <<end_consensus, proposal_time, proposal_received_time>>
-           /\ UNCHANGED <<decision, locked_value, locked_round, valid_value, valid_round>>
-           /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout,
-                          received_timely_proposal, inspected_proposal>>
-           /\ UNCHANGED <<forced_tx_queue>>
-           /\ action' = "UponQuorumOfPrecommitsAny"
+        /\  LET UniqueCommitters == { m.src : m \in msgs_precommit[round[p]] }
+            IN Cardinality(UniqueCommitters) >= THRESHOLD2
+        /\ evidence' = msgs_precommit[round[p]] \union evidence
+        /\ round[p] + 1 \in Rounds
+        /\ StartRound(p, round[p] + 1)
+        /\ UNCHANGED <<local_clock, real_time>>
+        /\ UNCHANGED <<fsmVars>>
+        /\ UNCHANGED <<end_consensus, proposal_time, proposal_received_time>>
+        /\ UNCHANGED <<decision, locked_value, locked_round, valid_value, valid_round>>
+        /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout,
+                        received_timely_proposal, inspected_proposal>>
+        /\ UNCHANGED <<forced_tx_queue>>
+        /\ action' = "UponQuorumOfPrecommitsAny"
                         
 
 
@@ -724,19 +724,17 @@ OnQuorumOfNilPrevotes(p) ==
 OnRoundCatchup(p) ==
     \E r \in {rr \in Rounds : rr > round[p]} :
         LET 
-            RoundMsgs ==
-                msgs_propose[r] \union msgs_prevote[r] \union msgs_precommit[r]
-        IN
-        \E MyEvidence \in SUBSET RoundMsgs :
-            LET Faster == { m.src : m \in MyEvidence } IN
+            RoundMsgs == msgs_propose[r] \union msgs_prevote[r] \union msgs_precommit[r]
+            Faster    == { m.src : m \in RoundMsgs }
+        IN  
             /\ Cardinality(Faster) >= THRESHOLD1
-            /\ evidence' = MyEvidence \union evidence
+            /\ evidence' = RoundMsgs \union evidence
             /\ StartRound(p, r)
             /\ UNCHANGED <<temporalVars, fsmVars>>
             /\ UNCHANGED <<end_consensus, proposal_time, proposal_received_time>>
             /\ UNCHANGED <<decision, locked_value, locked_round, valid_value, valid_round>>
             /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout,
-                           received_timely_proposal, inspected_proposal>>
+                            received_timely_proposal, inspected_proposal>>
             /\ UNCHANGED <<forced_tx_queue>>
             /\ action' = "OnRoundCatchup"
 
@@ -745,10 +743,11 @@ OnRoundCatchup(p) ==
 \* @type: (PROCESS) => Bool;
 UponfPlusOneTimeoutsAny(p) ==
     \E r \in {rr \in Rounds : rr > round[p]} :
-        \E MyEvidence \in SUBSET msgs_timeout[r] :
-            LET Timers == { m.src : m \in MyEvidence } IN
+        LET 
+            Timers == { m.src : m \in msgs_timeout[r] }
+        IN 
             /\ Cardinality(Timers) >= THRESHOLD1
-            /\ evidence' = MyEvidence \union evidence
+            /\ evidence' = msgs_timeout[r] \union evidence
             /\ StartRound(p, r)
             /\ UNCHANGED <<local_clock, real_time>>
             /\ UNCHANGED <<end_consensus, proposal_time, proposal_received_time>>
@@ -756,7 +755,7 @@ UponfPlusOneTimeoutsAny(p) ==
             /\ UNCHANGED <<forced_tx_queue>>
             /\ UNCHANGED <<fsmVars>>
             /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout,
-                           received_timely_proposal, inspected_proposal>>
+                            received_timely_proposal, inspected_proposal>>
             /\ action' = "UponfPlusOneTimeoutsAny"
 
 \* -- OnLocalTimerExpire: local countdown reached zero → broadcast timeout --
