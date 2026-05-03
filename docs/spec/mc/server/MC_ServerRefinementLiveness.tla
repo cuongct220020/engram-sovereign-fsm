@@ -1,55 +1,77 @@
----------------- MODULE MC_ServerRefinementLiveness ---------------- 
-EXTENDS EngramServer, TLC, Sequences
+---------------- MODULE MC_ServerRefinementLiveness ----------------
+(*
+ * MC_ServerRefinementLiveness — TLC Liveness Model Checker
+ *
+ * Runs TLC to verify LIVENESS properties of the concrete EngramServer spec
+ * against the abstract EngramConsensus (LiDO) spec via EngramRefinement.
+ *
+ * Run separately from MC_ServerRefinementSafety because:
+ *   - Liveness requires a SPECIFICATION (Init ∧ [][Next] ∧ Fairness)
+ *   - Smaller bounds (MaxRound = 2) needed — fairness checking is expensive
+ *   - MC_Server_Fairness defines the WF conditions for progress
+ *
+ * Corresponding config: MC_ServerRefinementLiveness.cfg
+ *)
+EXTENDS EngramServer, EngramRefinement, TLC, Sequences
 
 CONSTANTS n1, n2, n3, n4
 
 ASSUME QuorumOverlap
 
-(* ======================== NETWORK SCALE =============================== *)
-MC_Nodes == {n1, n2, n3, n4} 
+
+(* ======================== NETWORK CONFIGURATION ========================== *)
+MC_Nodes  == {n1, n2, n3, n4}
 MC_Method == {"TX_NORMAL", "TX_WITHDRAWAL"}
 MC_Faulty == {n4}
-MC_Corr == MC_Nodes \ MC_Faulty
+MC_Corr   == MC_Nodes \ MC_Faulty
 
-(* ======================== ROTATIONAL LEADER CONFIGURATION =============================== *)
-MC_NodeSeq == <<n1, n2, n3, n4>>
+
+(* ======================== ROTATIONAL LEADER SCHEDULE ===================== *)
+\* Round-robin proposer: node at position (r mod 4) + 1 in the sequence
+MC_NodeSeq  == <<n1, n2, n3, n4>>
 MC_Proposer == [r \in 0..5 |-> MC_NodeSeq[(r % 4) + 1]]
 
-(* ======================== INIT & NEXT =============================== *)
+
+(* ======================== INIT & NEXT ==================================== *)
 MC_Server_Init == Server_Init
 MC_Server_Next == Server_Next
 
-(* ======================== FAIRNESS & SPECIFICATION =============================== *) 
-MC_Server_Fairness == 
+
+(* ======================== FAIRNESS CONDITIONS ============================ *)
+\* Weak fairness on time advance ensures clocks always eventually tick.
+\* Weak fairness on message processing ensures every enabled action
+\* eventually fires (prevents "unfair" stuttering in liveness proofs).
+MC_Server_Fairness ==
     /\ WF_serverVars(Server_AdvanceRealTime)
-    /\ \A p \in MC_Corr : WF_serverVars(Server_MessageProcessing(p)) 
+    /\ \A p \in MC_Corr : WF_serverVars(Server_MessageProcessing(p))
+
+\* Full liveness specification: safety behaviour + fairness assumptions
+MC_Server_Spec ==
+    MC_Server_Init /\ [][MC_Server_Next]_serverVars /\ MC_Server_Fairness
 
 
-MC_Server_Spec == MC_Server_Init /\ [][MC_Server_Next]_serverVars /\ MC_Server_Fairness
+(* ======================== STATE SPACE PRUNING CONSTRAINT ================= *)
+\* Bounds are tighter than Safety run to keep liveness checking tractable.
+StateSpaceLimit ==
+    \* -- Tendermint bounds --
+    /\ \A n \in MC_Corr : round[n] <= MAX_ROUND
+    /\ real_time         <= MAX_TIMESTAMP
 
-(* ======================== PRUNING CONSTRAINT) =============================== *)
-StateSpaceLimit == 
-    \* 1. Tendermint constraints
-    /\ \A n \in MC_Corr : round[n] <= MaxRound
-    /\ realTime <= MaxTimestamp
-
-    \* 2. Environment Constraints
-    /\ h_btc_current <= MaxBTCHeight
-    /\ h_engram_current <= MaxEngramHeight
+    \* -- Chain height bounds --
+    /\ h_btc_current    <= MAX_BTC_HEIGHT
+    /\ h_engram_current <= MAX_ENGRAM_HEIGHT
     /\ h_engram_verified <= h_engram_current
-    /\ h_btc_submitted <= h_btc_current
-    /\ h_btc_anchored <= h_btc_submitted
+    /\ h_btc_submitted   <= h_btc_current
+    /\ h_btc_anchored    <= h_btc_submitted
 
-    \* 3. Controlled Chaos
-    /\ peer_count \in {2, 3}
+    \* -- P2P network size: limit peer churn to {2, 3} connected peers --
+    /\ Cardinality(active_peers) \in {2, 3}
+
+    \* -- DAS failure is binary, state already constrained by FSM invariant --
     /\ is_das_failed \in BOOLEAN
     /\ state \in {"ANCHORED", "SUSPICIOUS", "SOVEREIGN", "RECOVERING"}
 
 
-(* ======================== REFINEMENT CHECKS =============================== *)
-\* Phase 1: Verify Safety
-RefinementSafety == AbstractConsensus!Safety
-
-\* Phase 2: Verify Liveness
+(* ======================== REFINEMENT PROPERTIES ========================== *)
 RefinementLiveness == AbstractConsensus!Liveness
 =============================================================================

@@ -13,50 +13,50 @@ EXTENDS Integers, FiniteSets, EngramVars, EngramFSM
 (***************************************************************************)
 
 
-(********************* PROTOCOL PARAMETERS **********************************)
-\* General protocol parameters
+(* ======================== PROTOCOL PARAMETERS ============================= *)
+\* General consensus parameters
 CONSTANTS
     \* @type: Set(PROCESS);
-    Corr,          \* the set of correct processes 
+    Corr,           \* Set of correct (non-faulty) processes
     \* @type: Set(PROCESS);
-    Faulty,        \* the set of Byzantine processes, may be empty
-    \* @type: Int;  
-    N,             \* the total number of processes: correct, defective, and Byzantine
-    \* @type: Int;  
-    T,             \* an upper bound on the number of Byzantine processes
-    \* @type: ROUND;    
-    MaxRound,      \* the maximal round number
+    Faulty,         \* Set of Byzantine processes (may be empty)
+    \* @type: Int;
+    N,              \* Total number of processes: |Corr| + |Faulty|
+    \* @type: Int;
+    T,              \* Upper bound on the number of Byzantine processes
+    \* @type: ROUND;
+    MAX_ROUND,      \* Maximum round number (bounds state space for TLC)
     \* @type: ROUND -> PROCESS;
-    Proposer       \* the proposer function from Rounds to AllProcs
+    Proposer        \* Proposer schedule: maps each round to a process
 
 
-\* Time-related parameters
+\* Timing parameters
 CONSTANTS
     \* @type: TIME;
-    MaxTimestamp,  \* the maximal value of the clock tick
+    MAX_TIMESTAMP,  \* Maximum clock value (set to large number or \infty)
     \* @type: TIME;
-    MinTimestamp,  \* the minimal value of the clock tick
+    MIN_TIMESTAMP,  \* Minimum clock value (starting offset)
     \* @type: TIME;
-    Delay,         \* message delay
+    Delay,          \* Maximum message delivery delay
     \* @type: TIME;
-    Precision,     \* clock precision: the maximal difference between two local clocks
+    Precision,      \* Maximum skew between any two correct local clocks
     \* @type: TIME;
-    TimeoutDuration
+    TimeoutDuration \* Propose-step timeout duration
 
 
-\* peripheral-related parameters
+\* External chain height bounds
 CONSTANTS
     \* @type: Int;
-    MaxBTCHeight,
+    MAX_BTC_HEIGHT,     \* Bitcoin block height upper bound for TLC
     \* @type: Int;
-    MaxEngramHeight,
+    MAX_ENGRAM_HEIGHT,  \* Engram block height upper bound for TLC
     \* @type: Int;
-    MaxIgnoreRounds
-
+    MAX_IGNORE_ROUNDS   \* Censorship threshold: rounds a tx can be ignored
 
 ASSUME(N = Cardinality(Corr \union Faulty))
 
-(*************************** BASIC DEFINITIONS ************************************)
+
+(* ======================== BASIC DEFINITIONS ============================= *)
 \* @type: Set(PROCESS);
 AllProcs == Corr \union Faulty      \* the set of all processes
 
@@ -84,7 +84,7 @@ NilValue == "NIL_TX"
 ValuesOrNil == Values \union {NilValue}
 
 
-(************************* ENGRAM EXTERNAL ENTITIES *************************)
+(* ======================== ENGRAM TYPE VARS ============================= *)
 \* @type: Set(STR);
 FSMStates == {"ANCHORED", "SUSPICIOUS", "SOVEREIGN", "RECOVERING"}
 \* @type: STR
@@ -108,7 +108,7 @@ NilBTCReceipt == [
     checkpoint_block_hash       |-> "NilHash" 
 ]
 \* @type: Set(BTC_RECEIPT);
-BTCHeightsOrNil == BTCReceipts \union NilBTC_Receipt
+BTCReceiptsOrNil == BTCReceipts \union NilBTC_Receipt
 
 
 \* @type: Set(Int);
@@ -128,7 +128,7 @@ NilDAReceipt == [
 \* @type: Set(DA_RECEIPT);
 DAReceiptsOrNil == DA_Heights \union NilDA_Receipt
 
-(*********************** PROPOSAL & DECISION STRUCTURE **********************)
+(* ======================== PROPOSAL & DECISION STRUCTURE ============================= *)
 \* @type: Set(PROPOSAL);
 Proposals == [
     value: ValuesOrNil,
@@ -160,16 +160,16 @@ NilDecision == [
     round |-> NilRound
 ]
 
-(********************* BASIC HELPERS & THRESHOLDS ******************************)
+(* ======================== QUORUM THRESHOLDS ============================== *)
+\* @type: Int;
+THRESHOLD1 == T + 1       \* f+1: at least one correct process
+\* @type: Int;
+THRESHOLD2 == 2 * T + 1   \* 2f+1: quorum (requires N > 3T)
+
+(* ======================== BASIC MATH HELPERS ============================= *)
 \* a value hash is modeled as identity
 \* @type: (t) => t;
 Id(v) == v
-
-\* the two thresholds that are used in the algorithm
-\* @type: Int;
-THRESHOLD1 == T + 1     \* at least one process is not faulty
-\* @type: Int;
-THRESHOLD2 == 2 * T + 1 \* a quorum when having N > 3 * T
 
 \* @type: (TIME, TIME) => TIME;
 Min2(a,b) == IF a <= b THEN a ELSE b
@@ -193,16 +193,29 @@ Card(S) == Cardinality(S)
 
 
 (********************* TIME UTILITIES ******************************)
-\* Time validity check. If we want MaxTimestamp = \infty, set ValidTime(t) == TRUE
+\* Checks that t has not exceeded the model's timestamp bound.
+\* Set MAX_TIMESTAMP to a large value to model an unbounded clock.
 \* @type: (TIME) => Bool;
-ValidTime(t) == t < MaxTimestamp
+ValidTime(t) == t < MAX_TIMESTAMP
 
 
+\* Clock-synchrony predicate: a message is timely if it arrives within the
+\* [messageTime - Precision, messageTime + Precision + Delay] window.
 \* @type: (TIME, TIME) => Bool;
 IsTimely(processTime, messageTime) ==
-  /\ processTime >= messageTime - Precision
-  /\ processTime <= messageTime + Precision + Delay
+    /\ processTime >= messageTime - Precision
+    /\ processTime <= messageTime + Precision + Delay
 
+
+\* TRUE if all pairs of correct clocks are within Precision of each other.
+\* @type: Bool;
+SynchronizedLocalClocks ==
+    \A p \in Corr : \A q \in Corr :
+        p /= q =>
+            \/ /\ local_clock[p] >= local_clock[q]
+               /\ local_clock[p] - local_clock[q] < Precision
+            \/ /\ local_clock[p] <  local_clock[q]
+               /\ local_clock[q] - local_clock[p] < Precision
 
 (********************* DYNAMIC TOLERANCE CALCULATION *********************)
 \* The tolerance expands dynamically based on the Consensus Round.
@@ -219,8 +232,9 @@ BTCTolerance(round) ==
       [] OTHER  -> 0
 
 
-(********************* TRANSACTION & ZK-PROOF HELPERS ******************************)
-\* Helper to identify withdrawal transactions
+
+(* ======================== PROPOSAL HELPERS ================================ *)
+\* TRUE if the proposal value is a cross-chain withdrawal transaction
 \* @type: (STRING) => Bool;
 ContainsWithdrawal(propVal) == propVal = "TX_WITHDRAWAL"
 
@@ -269,31 +283,56 @@ IsValidProposal(prop) ==
         ELSE prop.zk_proof_ref = FALSE
 
 
-(********************* SENSORS & CENSORSHIP RESISTANCE ******************************)
-\* Censorship sensor
+\* Censorship sensor: TRUE iff process p should reject proposal for being censored
 \* @type: (PROCESS, PROPOSAL) => Bool;
-IsCensoring(p, prop) == 
+IsCensoring(p, prop) ==
     \E tx \in forced_tx_queue :
-        /\ tx_ignored_rounds[p][tx] >= MaxIgnoreRounds   \* Read from Node p's perspective
+        /\ tx_ignored_rounds[p][tx] >= MAX_IGNORE_ROUNDS
         /\ prop.value /= tx
 
 
-(************************ BYZANTINE MESSAGE SETS *********************)
-\* Only generate messages sent by the Faulty node (Extremely small number: T x MaxRound)
-\* @type: (ROUND) => Set(MESSAGE);
-FaultyTimeouts(r) == 
-    { [type |-> "TIMEOUT", src |-> f, round |-> r] : f \in Faulty }
+(* ======================== RECORD CONSTRUCTORS ============================ *)
+\* @type: (VALUE, TIME, ROUND, STRING, DA_RECEIPT, Int, Bool) => PROPOSAL;
+Proposal(v, t, r, fsm_s, da_receipt, h_btc, has_proof) ==
+    [
+        value        |-> v,
+        timestamp    |-> t,
+        round        |-> r,
+        fsm_state    |-> fsm_s,
+        da_receipt   |-> da_receipt,
+        \* TODO: refactor all things related to Proposal
+        btc_receipt  |-> [ checkpoint_block_height |-> h_btc,
+                            checkpoint_block_hash   |-> "hash" ],
+        zk_proof_ref |-> has_proof
+    ]
+
+\* @type: (PROPOSAL, ROUND) => DECISION;
+Decision(prop, r) ==
+    [
+        prop  |-> prop,
+        round |-> r
+    ]
+
+
+(* ======================== BYZANTINE MESSAGE SETS ========================= *)
+\* Pre-populate message buffers with faulty nodes' default messages so they
+\* can immediately contribute to quorums (modelling BFT adversary capability).
+\* Only T × MAX_ROUND messages total — negligible state space cost.
 
 \* @type: (ROUND) => Set(MESSAGE);
-FaultyPrevotes(r) == 
-    { [type |-> "PREVOTE", src |-> f, round |-> r, id |-> Id(NilProposal)] : f \in Faulty }
+FaultyTimeouts(r) ==
+    { [type |-> "TIMEOUT",    src |-> f, round |-> r] : f \in Faulty }
 
 \* @type: (ROUND) => Set(MESSAGE);
-FaultyPrecommits(r) == 
+FaultyPrevotes(r) ==
+    { [type |-> "PREVOTE",   src |-> f, round |-> r, id |-> Id(NilProposal)] : f \in Faulty }
+
+\* @type: (ROUND) => Set(MESSAGE);
+FaultyPrecommits(r) ==
     { [type |-> "PRECOMMIT", src |-> f, round |-> r, id |-> Id(NilProposal)] : f \in Faulty }
 
-
-(********************* PROTOCOL INITIALIZATION ******************************)
+(* ======================== INITIALIZATION ================================= *)
+\* Helper: set of all structurally valid proposal messages for round r
 \* @type: (ROUND) => Set(PROPMESSAGE);
 RoundProposals(r) ==
     [
@@ -304,6 +343,7 @@ RoundProposals(r) ==
     validRound: RoundsOrNil
     ]
 
+\* Sanity check: message function contains only messages for their own round
 \* @type: (ROUND -> Set(MESSAGE)) => Bool;
 BenignRoundsInMessages(msgfun) ==
   \* the message function never contains a message for a wrong round
@@ -311,135 +351,99 @@ BenignRoundsInMessages(msgfun) ==
     \A m \in msgfun[r]:
       r = m.round
 
-\* The initial states of the protocol. Some faults can be in the system already.
+\* Initial state — some Byzantine messages may already be present
 TM_Init ==
-    /\ round = [p \in Corr |-> 0]
-    /\ localClock \in [Corr -> MinTimestamp..(MinTimestamp + Precision)]
-    /\ localRemTime = [p \in Corr |-> TimeoutDuration]
-    /\ realTime = 0
-    /\ step = [p \in Corr |-> "PROPOSE"]
-    /\ decision = [p \in Corr |-> NilDecision]
-    /\ lockedValue = [p \in Corr |-> NilValue]
-    /\ lockedRound = [p \in Corr |-> NilRound]
-    /\ validValue = [p \in Corr |-> NilProposal]
-    /\ validRound = [p \in Corr |-> NilRound]
-    /\ msgsPropose = [r \in Rounds |-> {}]
-    /\ msgsPrevote   = [r \in Rounds |-> FaultyPrevotes(r)]
-    /\ msgsPrecommit = [r \in Rounds |-> FaultyPrecommits(r)]
-    /\ msgsTimeout   = [r \in Rounds |-> FaultyTimeouts(r)]
+    /\ round              = [p \in Corr |-> 0]
+    /\ local_clock       \in [Corr -> MIN_TIMESTAMP..(MIN_TIMESTAMP + Precision)]
+    /\ local_rem_time     = [p \in Corr |-> TimeoutDuration]
+    /\ real_time          = 0
+    /\ step               = [p \in Corr |-> "PROPOSE"]
+    /\ decision           = [p \in Corr |-> NilDecision]
+    /\ lockedValue        = [p \in Corr |-> NilValue]
+    /\ lockedRound        = [p \in Corr |-> NilRound]
+    /\ validValue         = [p \in Corr |-> NilProposal]
+    /\ validRound         = [p \in Corr |-> NilRound]
+    /\ msgsPropose        = [r \in Rounds |-> {}]
+    /\ msgsPrevote        = [r \in Rounds |-> FaultyPrevotes(r)]
+    /\ msgsPrecommit      = [r \in Rounds |-> FaultyPrecommits(r)]
+    /\ msgsTimeout        = [r \in Rounds |-> FaultyTimeouts(r)]
     /\ receivedTimelyProposal = [p \in Corr |-> {}]
-    /\ inspectedProposal = [r \in Rounds, p \in Corr |-> NilTimestamp]
+    /\ inspectedProposal      = [r \in Rounds, p \in Corr |-> NilTimestamp]
     /\ BenignRoundsInMessages(msgsPropose)
     /\ BenignRoundsInMessages(msgsPrevote)
     /\ BenignRoundsInMessages(msgsPrecommit)
-    /\ evidence = {}
-    /\ action = "Init"
-    /\ beginRound = 
-      [r \in Rounds |-> 
-        IF r = 0
-        THEN Min({localClock[p] : p \in Corr})
-        ELSE MaxTimestamp
-      ]
-    /\ endConsensus = [p \in Corr |-> NilTimestamp]
-    /\ lastBeginRound = 
-      [r \in Rounds |-> 
-        IF r = 0
-        THEN Max({localClock[p] : p \in Corr})
-        ELSE NilTimestamp
-      ]
-    /\ proposalTime = [r \in Rounds |-> NilTimestamp]
+    /\ evidence           = {}
+    /\ action             = "Init"
+    /\ beginRound         = [r \in Rounds |->
+                                IF r = 0
+                                THEN Min({local_clock[p] : p \in Corr})
+                                ELSE MAX_TIMESTAMP]
+    /\ endConsensus       = [p \in Corr |-> NilTimestamp]
+    /\ lastBeginRound     = [r \in Rounds |->
+                                IF r = 0
+                                THEN Max({local_clock[p] : p \in Corr})
+                                ELSE NilTimestamp]
+    /\ proposalTime         = [r \in Rounds |-> NilTimestamp]
     /\ proposalReceivedTime = [r \in Rounds |-> NilTimestamp]
+    /\ forced_tx_queue      = {"TX_NORMAL"}
+    /\ tx_ignored_rounds    = [p \in Corr |-> [tx \in ValidValues |-> 0]]
 
-    /\ forced_tx_queue = {"TX_NORMAL"}
-    /\ tx_ignored_rounds = [p \in Corr |-> [tx \in ValidValues |-> 0]]
 
-
-(************************ MESSAGE PASSING ********************************)
+(* ======================== MESSAGE BROADCAST HELPERS ====================== *)
 \* @type: (PROCESS, ROUND, PROPOSAL, ROUND) => Bool;
 BroadcastProposal(pSrc, pRound, pProposal, pValidRound) ==
-  LET 
-    \* @type: PROPMESSAGE;
-    newMsg ==
-    [
-      type       |-> "PROPOSAL", 
-      src        |-> pSrc, 
-      round      |-> pRound,
-      proposal   |-> pProposal, 
-      validRound |-> pValidRound
-    ]
-  IN
-  /\ msgsPropose' = [msgsPropose EXCEPT ![pRound] = msgsPropose[pRound] \union {newMsg}]
+    LET
+        \* @type: PROPMESSAGE;
+        newMsg == [
+            type       |-> "PROPOSAL",
+            src        |-> pSrc,
+            round      |-> pRound,
+            proposal   |-> pProposal,
+            validRound |-> pValidRound
+        ]
+    IN
+    msgsPropose' = [msgsPropose EXCEPT ![pRound] = msgsPropose[pRound] \union {newMsg}]
 
 \* @type: (PROCESS, ROUND, PROPOSAL) => Bool;
 BroadcastPrevote(pSrc, pRound, pId) ==
-  LET 
-    \* @type: PREMESSAGE;
-    newMsg == 
-    [
-      type  |-> "PREVOTE",
-      src   |-> pSrc, 
-      round |-> pRound, 
-      id    |-> pId
-    ]
-  IN
-  /\ msgsPrevote' = [msgsPrevote EXCEPT ![pRound] = msgsPrevote[pRound] \union {newMsg}]
+    LET
+        \* @type: PREMESSAGE;
+        newMsg == [
+            type  |-> "PREVOTE",
+            src   |-> pSrc,
+            round |-> pRound,
+            id    |-> pId
+        ]
+    IN
+    msgsPrevote' = [msgsPrevote EXCEPT ![pRound] = msgsPrevote[pRound] \union {newMsg}]
 
 \* @type: (PROCESS, ROUND, PROPOSAL) => Bool;
 BroadcastPrecommit(pSrc, pRound, pId) ==
-  LET
-    \* @type: PREMESSAGE; 
-    newMsg == 
-    [
-      type  |-> "PRECOMMIT",
-      src   |-> pSrc, 
-      round |-> pRound, 
-      id    |-> pId
-    ]
-  IN
-  /\ msgsPrecommit' = [msgsPrecommit EXCEPT ![pRound] = msgsPrecommit[pRound] \union {newMsg}]
+    LET
+        \* @type: PREMESSAGE;
+        newMsg == [
+            type  |-> "PRECOMMIT",
+            src   |-> pSrc,
+            round |-> pRound,
+            id    |-> pId
+        ]
+    IN
+    msgsPrecommit' = [msgsPrecommit EXCEPT ![pRound] = msgsPrecommit[pRound] \union {newMsg}]
 
 \* @type: (PROCESS, ROUND) => Bool;
-BroadcastTimeout(pSrc, pRound) == 
-    LET 
-        newMsg == 
-        [ 
-            type |-> "TIMEOUT", 
-            src |-> pSrc, 
-            round |-> pRound 
+BroadcastTimeout(pSrc, pRound) ==
+    LET
+        newMsg == [
+            type  |-> "TIMEOUT",
+            src   |-> pSrc,
+            round |-> pRound
         ]
-    IN 
-    /\ msgsTimeout' = [msgsTimeout EXCEPT ![pRound] = msgsTimeout[pRound] \union {newMsg}]
+    IN
+    msgsTimeout' = [msgsTimeout EXCEPT ![pRound] = msgsTimeout[pRound] \union {newMsg}]
 
-(***************************** TIME **************************************)
-\* @type: Bool;
-SynchronizedLocalClocks ==
-    \A p \in Corr : \A q \in Corr : 
-        p /= q => 
-            \/ /\ localClock[p] >= localClock[q]
-               /\ localClock[p] - localClock[q] < Precision 
-            \/ /\ localClock[p] < localClock[q]
-               /\ localClock[q] - localClock[p] < Precision
-    
-\* @type: (VALUE, TIME, ROUND, STRING, DA_RECEIPT, Int, Bool) => PROPOSAL;
-Proposal(v, t, r, fsm_state, da_receipt, h_btc, has_proof) == 
-    [ 
-        value             |-> v,
-        timestamp         |-> t,
-        round             |-> r,
-        fsm_state         |-> fsm_state,
-        da_receipt        |-> da_receipt,
-        btc_anchored      |-> h_btc,
-        zk_proof_ref      |-> has_proof  \* Has_proof is a Boolean from the environment
-    ]
 
-\* @type: (PROPOSAL, ROUND) => DECISION;
-Decision(p, r) ==
-    [
-        prop  |-> p,
-        round |-> r
-    ]
-
-(**************** MESSAGE PROCESSING TRANSITIONS *************************)
+(* ======================== ROUND MANAGEMENT ================================ *)
+\* Increment ignored-round counters for all pending forced transactions
 UpdateIgnoredRounds(p) ==
     tx_ignored_rounds' = [tx_ignored_rounds EXCEPT ![p] = 
         [tx \in ValidValues |-> 
@@ -449,7 +453,7 @@ UpdateIgnoredRounds(p) ==
         ]
     ]
 
-
+\* Move process p to round r, resetting its step and timeout
 \* @type: (PROCESS, ROUND) => Bool;
 StartRound(p, r) ==
    /\ step[p] /= "DECIDED" \* a decided process does not participate in consensus
@@ -462,233 +466,225 @@ StartRound(p, r) ==
    /\ localRemTime' = [localRemTime EXCEPT ![p] = TimeoutDuration]
    /\ UpdateIgnoredRounds(p)
 
+(* ======================== PROTOCOL ACTIONS ================================ *)
 
-\* Proposer inserts a valid proposal (injected directly from the Server layer)
+\* -- InsertProposal: called by EngramServer to inject a pre-built proposal --
 \* @type: (PROCESS, PROPOSAL) => Bool;
 InsertProposal(p, prop) ==
     LET r == round[p] IN
     /\ p = Proposer[r]
     /\ step[p] = "PROPOSE"
-    /\ \A m \in msgsPropose[r]: m.src /= p
-    
-    \* Broadcast the injected proposal and assert its app-level validity
+    /\ \A m \in msgsPropose[r] : m.src /= p
     /\ BroadcastProposal(p, r, prop, validRound[p])
-    /\ IsValidProposal(prop)               
-    
-    /\ proposalTime' = [proposalTime EXCEPT ![r] = realTime]
+    /\ IsValidProposal(prop)
+    /\ proposalTime' = [proposalTime EXCEPT ![r] = real_time]
     /\ UNCHANGED <<temporalVars, coreVars, fsmVars, censorVars>>
-    /\ UNCHANGED <<msgsPrevote, msgsPrecommit, msgsTimeout, evidence, receivedTimelyProposal, inspectedProposal>>
+    /\ UNCHANGED <<msgsPrevote, msgsPrecommit, msgsTimeout, evidence,
+                   receivedTimelyProposal, inspectedProposal>>
     /\ UNCHANGED <<beginRound, endConsensus, lastBeginRound, proposalReceivedTime>>
     /\ action' = "InsertProposal"
 
 
-\* - ReceiveProposal: Buffers incoming proposals from the leader. It acts as 
-\* a time-bound filter, only accepting proposals that arrive within the 
-\* synchronous time window (IsTimely).
+\* -- ReceiveProposal: time-bounded proposal buffer (IsTimely filter) --
 \* @type: (PROCESS) => Bool;
 ReceiveProposal(p) ==
-  LET r == round[p] IN
-  \E msg \in msgsPropose[r] :
-      /\ msg.type = "PROPOSAL"
-      /\ msg.src = Proposer[r]
-      /\ msg.validRound = NilRound
-      /\ inspectedProposal[r,p] = NilTimestamp
-      /\ msg \notin receivedTimelyProposal[p]
-      /\ inspectedProposal' = [inspectedProposal EXCEPT ![r,p] = localClock[p]]
-      /\ LET isTimely == IsTimely(localClock[p], msg.proposal.timestamp) IN
-         \/ /\ isTimely
-            /\ receivedTimelyProposal' = [receivedTimelyProposal EXCEPT ![p] = @ \union {msg}]
-            /\ LET isNilTimestamp == proposalReceivedTime[r] = NilTimestamp IN
-               \/ /\ isNilTimestamp
-                  /\ proposalReceivedTime' = [proposalReceivedTime EXCEPT ![r] = realTime]
-               \/ /\ ~isNilTimestamp
-                  /\ UNCHANGED proposalReceivedTime
-         \/ /\ ~isTimely
-            /\ UNCHANGED <<receivedTimelyProposal, proposalReceivedTime>>
-      /\ UNCHANGED <<temporalVars, coreVars, fsmVars, censorVars>>
-      /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit, msgsTimeout, evidence>>
-      /\ UNCHANGED <<beginRound, endConsensus, lastBeginRound, proposalTime>>
-      /\ action' = "ReceiveProposal"
+    LET r == round[p] IN
+    \E msg \in msgsPropose[r] :
+        /\ msg.type       = "PROPOSAL"
+        /\ msg.src        = Proposer[r]
+        /\ msg.validRound = NilRound
+        /\ inspectedProposal[r, p] = NilTimestamp
+        /\ msg \notin receivedTimelyProposal[p]
+        /\ inspectedProposal' = [inspectedProposal EXCEPT ![r, p] = local_clock[p]]
+        /\ LET isTimely == IsTimely(local_clock[p], msg.proposal.timestamp) IN
+               \/ /\ isTimely
+                  /\ receivedTimelyProposal' =
+                         [receivedTimelyProposal EXCEPT ![p] = @ \union {msg}]
+                  /\ LET isNilTimestamp == proposalReceivedTime[r] = NilTimestamp IN
+                         \/ /\ isNilTimestamp
+                            /\ proposalReceivedTime' =
+                                   [proposalReceivedTime EXCEPT ![r] = real_time]
+                         \/ /\ ~isNilTimestamp
+                            /\ UNCHANGED proposalReceivedTime
+               \/ /\ ~isTimely
+                  /\ UNCHANGED <<receivedTimelyProposal, proposalReceivedTime>>
+        /\ UNCHANGED <<temporalVars, coreVars, fsmVars, censorVars>>
+        /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit, msgsTimeout, evidence>>
+        /\ UNCHANGED <<beginRound, endConsensus, lastBeginRound, proposalTime>>
+        /\ action' = "ReceiveProposal"
 
 
-\* - UponProposalInPropose: The "Gatekeeper". Evaluates a timely proposal. 
-\* If it passes all application-level checks (IsValidProposal, ZK-proofs), 
-\* the node casts a PREVOTE for it. Otherwise, it votes Nil.
+\* -- UponProposalInPropose: gatekeeper — evaluates proposal validity and votes --
+\* If censorship detected: broadcast timeout and skip to next round.
+\* Otherwise: PREVOTE for the proposal (or Nil if invalid).
 \* @type: (PROCESS) => Bool;
 UponProposalInPropose(p) ==
     LET r == round[p] IN
     \E msg \in receivedTimelyProposal[p] :
-        /\ msg.type = "PROPOSAL"
-        /\ msg.round = r
-        /\ msg.src = Proposer[r]
+        /\ msg.type       = "PROPOSAL"
+        /\ msg.round      = r
+        /\ msg.src        = Proposer[r]
         /\ msg.validRound = NilRound
-        /\ step[p] = "PROPOSE"
+        /\ step[p]        = "PROPOSE"
         /\ evidence' = {msg} \union evidence
-        /\ LET 
+        /\ LET
                prop == msg.proposal
            IN
-           IF IsCensoring(p, prop) THEN
-                \* 1. Branch under review: Prevote rejected, forced early round transfer
-                /\ BroadcastTimeout(p, r)
-                /\ StartRound(p, r + 1)
-                
-                /\ UNCHANGED <<lockedValue, lockedRound, validValue, validRound, decision>>
-                /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit, receivedTimelyProposal, inspectedProposal>>
-                /\ UNCHANGED <<localClock, realTime>>
-                /\ UNCHANGED <<endConsensus, proposalTime, proposalReceivedTime>>
-                /\ UNCHANGED <<fsmVars, forced_tx_queue>>
+           IF IsCensoring(p, prop)
+           THEN
+               \* Censorship branch: reject and force round advance
+               /\ BroadcastTimeout(p, r)
+               /\ StartRound(p, r + 1)
+               /\ UNCHANGED <<lockedValue, lockedRound, validValue, validRound, decision>>
+               /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit,
+                              receivedTimelyProposal, inspectedProposal>>
+               /\ UNCHANGED <<local_clock, real_time>>
+               /\ UNCHANGED <<endConsensus, proposalTime, proposalReceivedTime>>
+               /\ UNCHANGED <<fsmVars, forced_tx_queue>>
            ELSE
-                \* 2. Normal branch
-                /\ LET vote_target == IF IsValidProposal(prop) /\ (lockedRound[p] = NilRound \/ lockedValue[p] = prop.value) 
-                                        THEN prop 
-                                        ELSE NilProposal
-                    IN BroadcastPrevote(p, r, vote_target)
-                /\ step' = [step EXCEPT ![p] = "PREVOTE"]
-                
-                /\ UNCHANGED <<round, decision, lockedValue, lockedRound, validValue, validRound>>
-                /\ UNCHANGED <<msgsPropose, msgsPrecommit, msgsTimeout, receivedTimelyProposal, inspectedProposal>>
-                /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
-               
+               \* Normal branch: vote for proposal or Nil
+               /\ LET vote_target ==
+                      IF IsValidProposal(prop)
+                         /\ (lockedRound[p] = NilRound \/ lockedValue[p] = prop.value)
+                      THEN prop
+                      ELSE NilProposal
+                  IN BroadcastPrevote(p, r, vote_target)
+               /\ step' = [step EXCEPT ![p] = "PREVOTE"]
+               /\ UNCHANGED <<round, decision, lockedValue, lockedRound,
+                              validValue, validRound>>
+               /\ UNCHANGED <<msgsPropose, msgsPrecommit, msgsTimeout,
+                              receivedTimelyProposal, inspectedProposal>>
+               /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
         /\ action' = "UponProposalInPropose"
 
 
-\* - UponProposalInProposeAndPrevote: Handles a proposal that carries a 
-\* `validRound` (indicating the network previously locked on this value in 
-\* a prior round). Validates and PREVOTEs accordingly.
+\* -- UponProposalInProposeAndPrevote: handles re-proposed locked values --
+\* Triggered when proposal.validRound >= 0 (network locked in a prior round).
 \* @type: (PROCESS) => Bool;
 UponProposalInProposeAndPrevote(p) ==
-  LET r == round[p] IN
-  \E msg \in msgsPropose[r] :
-      /\ msg.type = "PROPOSAL"
-      /\ msg.src = Proposer[r]
-      /\ msg.validRound >= 0 /\ msg.validRound < r
-      /\ step[p] = "PROPOSE"
-      /\ LET prop == msg.proposal
-             vr == msg.validRound
-             PV == { m \in msgsPrevote[vr]: m.id = Id(prop) }
-         IN /\ Cardinality(PV) >= THRESHOLD2
-            /\ evidence' = PV \union {msg} \union evidence
-            /\ LET mid == IF IsValidProposal(prop) /\ (lockedRound[p] <= vr \/ lockedValue[p] = prop.value)
-                          THEN Id(prop) ELSE NilProposal
-               IN BroadcastPrevote(p, r, mid)
-      /\ step' = [step EXCEPT ![p] = "PREVOTE"]
-      /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
-      /\ UNCHANGED <<round, decision, lockedValue, lockedRound, validValue, validRound>>
-      /\ UNCHANGED <<msgsPropose, msgsPrecommit, msgsTimeout, receivedTimelyProposal, inspectedProposal>>
-      /\ action' = "UponProposalInProposeAndPrevote"
+    LET r == round[p] IN
+    \E msg \in msgsPropose[r] :
+        /\ msg.type       = "PROPOSAL"
+        /\ msg.src        = Proposer[r]
+        /\ msg.validRound >= 0 /\ msg.validRound < r
+        /\ step[p]        = "PROPOSE"
+        /\ LET
+               prop == msg.proposal
+               vr   == msg.validRound
+               PV   == { m \in msgsPrevote[vr] : m.id = Id(prop) }
+           IN
+           /\ Cardinality(PV) >= THRESHOLD2
+           /\ evidence' = PV \union {msg} \union evidence
+           /\ LET mid ==
+                  IF IsValidProposal(prop)
+                     /\ (lockedRound[p] <= vr \/ lockedValue[p] = prop.value)
+                  THEN Id(prop)
+                  ELSE NilProposal
+              IN BroadcastPrevote(p, r, mid)
+        /\ step' = [step EXCEPT ![p] = "PREVOTE"]
+        /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
+        /\ UNCHANGED <<round, decision, lockedValue, lockedRound, validValue, validRound>>
+        /\ UNCHANGED <<msgsPropose, msgsPrecommit, msgsTimeout,
+                       receivedTimelyProposal, inspectedProposal>>
+        /\ action' = "UponProposalInProposeAndPrevote"
 
 
-\* - UponQuorumOfPrevotesAny: Triggered when the node observes a 2/3+ quorum 
-\* of PREVOTEs for anything (including Nil). Advances the state to PRECOMMIT.
+\* -- UponQuorumOfPrevotesAny: 2f+1 PREVOTEs for anything -> advance to PRECOMMIT --
 \* @type: (PROCESS) => Bool;
 UponQuorumOfPrevotesAny(p) ==
-    /\ step[p] = "PREVOTE" \* line 34 and 61
-    /\ \E MyEvidence \in SUBSET msgsPrevote[round[p]]:
-        \* find the unique voters in the evidence
-        LET Voters == { m.src: m \in MyEvidence } IN
-        \* compare the number of the unique voters against the threshold
-        /\ Cardinality(Voters) >= THRESHOLD2 \* line 34
-        /\ evidence' = MyEvidence \union evidence
-        /\ BroadcastPrecommit(p, round[p], NilProposal)
-        /\ step' = [step EXCEPT ![p] = "PRECOMMIT"]
-        /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
-        /\ UNCHANGED
-            <<round, (*step,*) decision, lockedValue, 
-            lockedRound, validValue, validRound>>
-        /\ UNCHANGED 
-            <<msgsPropose, msgsPrevote, (*msgsPrecommit, *)
-            (*evidence,*) msgsTimeout, receivedTimelyProposal, inspectedProposal>>
-        /\ action' = "UponQuorumOfPrevotesAny"
+    /\ step[p] = "PREVOTE"
+    /\ \E MyEvidence \in SUBSET msgsPrevote[round[p]] :
+           LET Voters == { m.src : m \in MyEvidence } IN
+           /\ Cardinality(Voters) >= THRESHOLD2
+           /\ evidence' = MyEvidence \union evidence
+           /\ BroadcastPrecommit(p, round[p], NilProposal)
+           /\ step' = [step EXCEPT ![p] = "PRECOMMIT"]
+           /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
+           /\ UNCHANGED <<round, decision, lockedValue, lockedRound, validValue, validRound>>
+           /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsTimeout,
+                          receivedTimelyProposal, inspectedProposal>>
+           /\ action' = "UponQuorumOfPrevotesAny"
 
 
-\* - UponProposalInPrevoteOrCommitAndPrevote: Triggered when a 2/3+ quorum of 
-\* PREVOTEs for a *specific* valid proposal is reached. The node LOCKS the 
-\* value (updates lockedValue/lockedRound) and PRECOMMITs for it.
+\* -- UponProposalInPrevoteOrCommitAndPrevote: 2f+1 PREVOTEs for a specific value -> LOCK --
 \* @type: (PROCESS) => Bool;
 UponProposalInPrevoteOrCommitAndPrevote(p) ==
-  LET r == round[p] IN
-  \E msg \in msgsPropose[r] :
-      /\ msg.type = "PROPOSAL"
-      /\ msg.src = Proposer[r]
-      /\ step[p] \in {"PREVOTE", "PRECOMMIT"}
-      /\ LET prop == msg.proposal
-             PV == { m \in msgsPrevote[r]: m.id = Id(prop) }
-         IN /\ Cardinality(PV) >= THRESHOLD2
-            /\ evidence' = PV \union {msg} \union evidence
-            /\ IF step[p] = "PREVOTE" THEN
-                  /\ lockedValue' = [lockedValue EXCEPT ![p] = prop.value]
-                  /\ lockedRound' = [lockedRound EXCEPT ![p] = r]
+    LET r == round[p] IN
+    \E msg \in msgsPropose[r] :
+        /\ msg.type = "PROPOSAL"
+        /\ msg.src  = Proposer[r]
+        /\ step[p] \in {"PREVOTE", "PRECOMMIT"}
+        /\ LET
+               prop == msg.proposal
+               PV   == { m \in msgsPrevote[r] : m.id = Id(prop) }
+           IN
+           /\ Cardinality(PV) >= THRESHOLD2
+           /\ evidence' = PV \union {msg} \union evidence
+           /\ IF step[p] = "PREVOTE"
+              THEN
+                  /\ lockedValue'  = [lockedValue  EXCEPT ![p] = prop.value]
+                  /\ lockedRound'  = [lockedRound  EXCEPT ![p] = r]
                   /\ BroadcastPrecommit(p, r, Id(prop))
-                  /\ step' = [step EXCEPT ![p] = "PRECOMMIT"]
+                  /\ step'         = [step EXCEPT ![p] = "PRECOMMIT"]
                   /\ UNCHANGED <<validValue, validRound>>
-               ELSE
-                  /\ validValue' = [validValue EXCEPT ![p] = prop]
-                  /\ validRound' = [validRound EXCEPT ![p] = r]
+              ELSE
+                  /\ validValue'   = [validValue  EXCEPT ![p] = prop]
+                  /\ validRound'   = [validRound  EXCEPT ![p] = r]
                   /\ UNCHANGED <<lockedValue, lockedRound, msgsPrecommit, step>>
-      /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
-      /\ UNCHANGED <<round, decision>>
-      /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsTimeout, receivedTimelyProposal, inspectedProposal>>
-      /\ action' = "UponProposalInPrevoteOrCommitAndPrevote"
+        /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
+        /\ UNCHANGED <<round, decision>>
+        /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsTimeout,
+                       receivedTimelyProposal, inspectedProposal>>
+        /\ action' = "UponProposalInPrevoteOrCommitAndPrevote"
 
 
-\* - UponQuorumOfPrecommitsAny: Triggered when a 2/3+ quorum of PRECOMMITs 
-\* for anything is reached, but no specific value won. Advances the network 
-\* to the next round.
+\* -- UponQuorumOfPrecommitsAny: 2f+1 PRECOMMITs without decision -> next round --
 \* @type: (PROCESS) => Bool;
 UponQuorumOfPrecommitsAny(p) ==
-    /\ \E MyEvidence \in SUBSET msgsPrecommit[round[p]]:
-        \* find the unique committers in the evidence
-        LET Committers == { m.src: m \in MyEvidence } IN
-        \* compare the number of the unique committers against the threshold
-        /\ Cardinality(Committers) >= THRESHOLD2 \* line 47
-        /\ evidence' = MyEvidence \union evidence
-        /\ round[p] + 1 \in Rounds
-        /\ StartRound(p, round[p] + 1)
-        /\ UNCHANGED <<localClock, realTime>> 
-        /\ UNCHANGED <<fsmVars>>
-        /\ UNCHANGED
-            <<(*beginRound,*) endConsensus, (*lastBeginRound,*)
-            proposalTime, proposalReceivedTime>>
-        /\ UNCHANGED
-            <<(*round, step,*) decision, lockedValue, 
-            lockedRound, validValue, validRound>>
-        /\ UNCHANGED 
-            <<msgsPropose, msgsPrevote, msgsPrecommit,
-            (*evidence,*) msgsTimeout, receivedTimelyProposal, inspectedProposal>>
-        /\ UNCHANGED <<forced_tx_queue>>
-        /\ action' = "UponQuorumOfPrecommitsAny"
+    /\ \E MyEvidence \in SUBSET msgsPrecommit[round[p]] :
+           LET Committers == { m.src : m \in MyEvidence } IN
+           /\ Cardinality(Committers) >= THRESHOLD2
+           /\ evidence' = MyEvidence \union evidence
+           /\ round[p] + 1 \in Rounds
+           /\ StartRound(p, round[p] + 1)
+           /\ UNCHANGED <<local_clock, real_time>>
+           /\ UNCHANGED <<fsmVars>>
+           /\ UNCHANGED <<endConsensus, proposalTime, proposalReceivedTime>>
+           /\ UNCHANGED <<decision, lockedValue, lockedRound, validValue, validRound>>
+           /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit, msgsTimeout,
+                          receivedTimelyProposal, inspectedProposal>>
+           /\ UNCHANGED <<forced_tx_queue>>
+           /\ action' = "UponQuorumOfPrecommitsAny"
                         
 
 
-\* - UponProposalInPrecommitNoDecision: The ultimate "Commit" function. 
-\* Triggered when the node observes a 2/3+ quorum of PRECOMMITs for a 
-\* *specific* proposal. The node finalizes the block, updates its decision 
-\* state, and halts voting for the current round.
+\* -- UponProposalInPrecommitNoDecision: commit function — 2f+1 PRECOMMITs for a value --
 \* @type: (PROCESS) => Bool;
 UponProposalInPrecommitNoDecision(p) ==
-  LET r == round[p] IN
-  \E msg \in msgsPropose[r] :
-      /\ msg.type = "PROPOSAL"
-      /\ msg.src = Proposer[r]
-      /\ decision[p] = NilDecision
-      /\ inspectedProposal[r,p] /= NilTimestamp
-      /\ LET prop == msg.proposal
-             PV == { m \in msgsPrecommit[r]: m.id = Id(prop) }
-         IN /\ Cardinality(PV) >= THRESHOLD2
-            /\ evidence' = PV \union {msg} \union evidence
-            /\ decision' = [decision EXCEPT ![p] = Decision(prop, r)]
-      /\ endConsensus' = [endConsensus EXCEPT ![p] = localClock[p]]
-      /\ step' = [step EXCEPT ![p] = "DECIDED"]
-      /\ UNCHANGED <<temporalVars, fsmVars, censorVars>>
-      /\ UNCHANGED <<round, lockedValue, lockedRound, validValue, validRound>>
-      /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit, msgsTimeout, receivedTimelyProposal, inspectedProposal>>
-      /\ UNCHANGED <<beginRound, lastBeginRound, proposalTime, proposalReceivedTime>>
-      /\ action' = "UponProposalInPrecommitNoDecision"
+    LET r == round[p] IN
+    \E msg \in msgsPropose[r] :
+        /\ msg.type  = "PROPOSAL"
+        /\ msg.src   = Proposer[r]
+        /\ decision[p] = NilDecision
+        /\ inspectedProposal[r, p] /= NilTimestamp
+        /\ LET
+               prop == msg.proposal
+               PV   == { m \in msgsPrecommit[r] : m.id = Id(prop) }
+           IN
+           /\ Cardinality(PV) >= THRESHOLD2
+           /\ evidence' = PV \union {msg} \union evidence
+           /\ decision' = [decision EXCEPT ![p] = Decision(prop, r)]
+        /\ endConsensus' = [endConsensus EXCEPT ![p] = local_clock[p]]
+        /\ step'         = [step EXCEPT ![p] = "DECIDED"]
+        /\ UNCHANGED <<temporalVars, fsmVars, censorVars>>
+        /\ UNCHANGED <<round, lockedValue, lockedRound, validValue, validRound>>
+        /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit, msgsTimeout,
+                       receivedTimelyProposal, inspectedProposal>>
+        /\ UNCHANGED <<beginRound, lastBeginRound, proposalTime, proposalReceivedTime>>
+        /\ action' = "UponProposalInPrecommitNoDecision"
 
 
-\* - OnTimeoutPropose: Fallback mechanisms. If the 
-\* leader is offline, malicious, or censoring transactions, the node times 
-\* out and casts a Nil PREVOTE to force a round change.
+\* -- OnTimeoutPropose: node is not leader, proposal timed out -> PREVOTE Nil --
 \* @type: (PROCESS) => Bool;
 OnTimeoutPropose(p) ==
     /\ step[p] = "PROPOSE"
@@ -696,91 +692,80 @@ OnTimeoutPropose(p) ==
     /\ BroadcastPrevote(p, round[p], NilProposal)
     /\ step' = [step EXCEPT ![p] = "PREVOTE"]
     /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
-    /\ UNCHANGED
-        <<round, (*step,*) decision, lockedValue, 
-        lockedRound, validValue, validRound>>
-    /\ UNCHANGED 
-        <<msgsPropose, (*msgsPrevote,*) msgsPrecommit, msgsTimeout, 
-        evidence, receivedTimelyProposal, inspectedProposal>>
+    /\ UNCHANGED <<round, decision, lockedValue, lockedRound, validValue, validRound>>
+    /\ UNCHANGED <<msgsPropose, msgsPrecommit, msgsTimeout,
+                   evidence, receivedTimelyProposal, inspectedProposal>>
     /\ action' = "OnTimeoutPropose"
 
 
-\* - OnQuorumOfNilPrevotes: Handles the scenario where 2/3+ nodes voted Nil 
-\* in the Prevote phase. Moves the node directly to Precommit Nil.
+\* -- OnQuorumOfNilPrevotes: 2f+1 nil PREVOTEs -> PRECOMMIT Nil --
 \* @type: (PROCESS) => Bool;
 OnQuorumOfNilPrevotes(p) ==
     /\ step[p] = "PREVOTE"
-    /\ LET PV == { m \in msgsPrevote[round[p]]: m.id = Id(NilProposal) } IN
-        /\ Cardinality(PV) >= THRESHOLD2 \* line 36
-        /\ evidence' = PV \union evidence
-        /\ BroadcastPrecommit(p, round[p], Id(NilProposal))
-        /\ step' = [step EXCEPT ![p] = "PRECOMMIT"]
-        /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
-        /\ UNCHANGED
-            <<round, (*step,*) decision, lockedValue, 
-            lockedRound, validValue, validRound>>
-        /\ UNCHANGED 
-            <<msgsPropose, msgsPrevote, (*msgsPrecommit,*)
-            (*evidence,*) msgsTimeout, receivedTimelyProposal, inspectedProposal>>
-        /\ action' = "OnQuorumOfNilPrevotes"
+    /\ LET PV == { m \in msgsPrevote[round[p]] : m.id = Id(NilProposal) } IN
+           /\ Cardinality(PV) >= THRESHOLD2
+           /\ evidence' = PV \union evidence
+           /\ BroadcastPrecommit(p, round[p], Id(NilProposal))
+           /\ step' = [step EXCEPT ![p] = "PRECOMMIT"]
+           /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
+           /\ UNCHANGED <<round, decision, lockedValue, lockedRound, validValue, validRound>>
+           /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsTimeout,
+                          receivedTimelyProposal, inspectedProposal>>
+           /\ action' = "OnQuorumOfNilPrevotes"
 
 
-\* - OnRoundCatchup: Fast-forward synchronization. If a node falls offline 
-\* and observes f+1 messages from a higher round, it abandons its current 
-\* state and jumps to the higher round to catch up.
+\* -- OnRoundCatchup: fast-forward — f+1 messages from higher round observed --
 \* @type: (PROCESS) => Bool;
 OnRoundCatchup(p) ==
-  \E r \in {rr \in Rounds: rr > round[p]}:
-    LET RoundMsgs == msgsPropose[r] \union msgsPrevote[r] \union msgsPrecommit[r] IN
-    \E MyEvidence \in SUBSET RoundMsgs:
-        LET Faster == { m.src: m \in MyEvidence } IN
-        /\ Cardinality(Faster) >= THRESHOLD1
-        /\ evidence' = MyEvidence \union evidence
-        /\ StartRound(p, r)
-        /\ UNCHANGED <<temporalVars, fsmVars>>
-        /\ UNCHANGED
-            <<(*beginRound,*) endConsensus, (*lastBeginRound,*)
-            proposalTime, proposalReceivedTime>>
-        /\ UNCHANGED
-            <<(*round, step,*) decision, lockedValue, 
-            lockedRound, validValue, validRound>>
-        /\ UNCHANGED 
-            <<msgsPropose, msgsPrevote, msgsPrecommit,
-            (*evidence,*) msgsTimeout, receivedTimelyProposal, inspectedProposal>>
-        /\ UNCHANGED <<forced_tx_queue>>
-        /\ action' = "OnRoundCatchup"
+    \E r \in {rr \in Rounds : rr > round[p]} :
+        LET RoundMsgs ==
+                msgsPropose[r] \union msgsPrevote[r] \union msgsPrecommit[r]
+        IN
+        \E MyEvidence \in SUBSET RoundMsgs :
+            LET Faster == { m.src : m \in MyEvidence } IN
+            /\ Cardinality(Faster) >= THRESHOLD1
+            /\ evidence' = MyEvidence \union evidence
+            /\ StartRound(p, r)
+            /\ UNCHANGED <<temporalVars, fsmVars>>
+            /\ UNCHANGED <<endConsensus, proposalTime, proposalReceivedTime>>
+            /\ UNCHANGED <<decision, lockedValue, lockedRound, validValue, validRound>>
+            /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit, msgsTimeout,
+                           receivedTimelyProposal, inspectedProposal>>
+            /\ UNCHANGED <<forced_tx_queue>>
+            /\ action' = "OnRoundCatchup"
 
-(************************ IMPROVED PACEMAKER (f+1 TIMEOUTS) *********************)
+
+\* -- UponfPlusOneTimeoutsAny: f+1 timeout messages from higher round -> advance --
 \* @type: (PROCESS) => Bool;
 UponfPlusOneTimeoutsAny(p) ==
-    \E r \in {rr \in Rounds: rr > round[p]}:
-        \E MyEvidence \in SUBSET msgsTimeout[r]:
-            LET Timers == { m.src: m \in MyEvidence } IN
-                /\ Cardinality(Timers) >= THRESHOLD1 
-                /\ evidence' = MyEvidence \union evidence
-                
-                \* Call the round-forward function to fast-forward through other honest nodes.
-                /\ StartRound(p, r)
-                
-                /\ UNCHANGED <<localClock, realTime>>
-                /\ UNCHANGED <<endConsensus, proposalTime, proposalReceivedTime>>
-                /\ UNCHANGED <<decision, lockedValue, lockedRound, validValue, validRound>>
-                /\ UNCHANGED <<forced_tx_queue>>            
-                /\ UNCHANGED <<fsmVars>>
-                /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit, msgsTimeout, receivedTimelyProposal, inspectedProposal>>
-                /\ action' = "UponfPlusOneTimeoutsAny"
+    \E r \in {rr \in Rounds : rr > round[p]} :
+        \E MyEvidence \in SUBSET msgsTimeout[r] :
+            LET Timers == { m.src : m \in MyEvidence } IN
+            /\ Cardinality(Timers) >= THRESHOLD1
+            /\ evidence' = MyEvidence \union evidence
+            /\ StartRound(p, r)
+            /\ UNCHANGED <<local_clock, real_time>>
+            /\ UNCHANGED <<endConsensus, proposalTime, proposalReceivedTime>>
+            /\ UNCHANGED <<decision, lockedValue, lockedRound, validValue, validRound>>
+            /\ UNCHANGED <<forced_tx_queue>>
+            /\ UNCHANGED <<fsmVars>>
+            /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit, msgsTimeout,
+                           receivedTimelyProposal, inspectedProposal>>
+            /\ action' = "UponfPlusOneTimeoutsAny"
 
+\* -- OnLocalTimerExpire: local countdown reached zero → broadcast timeout --
 \* @type: (PROCESS) => Bool;
 OnLocalTimerExpire(p) ==
-    /\ localRemTime[p] = 0
+    /\ local_rem_time[p] = 0
     /\ BroadcastTimeout(p, round[p])
     /\ UNCHANGED <<coreVars, temporalVars, fsmVars, invariantVars, censorVars>>
-    /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit, evidence, receivedTimelyProposal, inspectedProposal>>
+    /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit, evidence,
+                   receivedTimelyProposal, inspectedProposal>>
     /\ action' = "OnLocalTimerExpire"
 
 
-(********************* PROTOCOL TRANSITIONS ******************************)
-\* advance the global clock
+(* ======================== CLOCK ADVANCE ==================================== *)
+\* Advance the global real_time and update all local clocks and timers accordingly
 AdvanceRealTime ==
     /\ ValidTime(realTime)
     /\ \E t \in Timestamps:
@@ -796,6 +781,8 @@ AdvanceRealTime ==
         /\ action' = "AdvanceRealTime"
     
 
+(* ======================== MESSAGE DISPATCH ================================= *)
+\* Aggregate all per-process message-processing actions
 \* process timely messages
 \* @type: (PROCESS) => Bool;
 MessageProcessing(p) ==
@@ -818,111 +805,136 @@ MessageProcessing(p) ==
     \/ OnLocalTimerExpire(p)
 
 
-(************************ BYZANTINE DATA WITHHOLDING ATTACK *********************)
-Byzantine_Data_Withholding == 
-    \E r \in Rounds:
-        \* Only activated when the malicious Node is selected as the Leader of this round
+(* ======================== ADVERSARY ACTIONS ================================ *)
+\* Byzantine Data-Withholding Attack: faulty leader broadcasts a structurally
+\* valid proposal but sets attestation = FALSE (data is not actually available).
+Byzantine_Data_Withholding ==
+    \E r \in Rounds :
         /\ Proposer[r] \in Faulty
-        \* Ensure it hasn't sent any proposals before.
-        /\ msgsPropose[r] = {} 
-        \* Create a valid structured proposal but intentionally hide data (attestation = FALSE)
-        /\ LET bad_da == [ published_block_height |-> 999, attestation |-> FALSE ] 
-               bad_prop == Proposal("TX_NORMAL", MinTimestamp, r, state, bad_da, h_btc_current, FALSE)
-               bad_msg == [ type |-> "PROPOSAL", src |-> Proposer[r], round |-> r, proposal |-> bad_prop, validRound |-> NilRound ]
-           IN 
-            /\ msgsPropose' = [msgsPropose EXCEPT ![r] = msgsPropose[r] \union {bad_msg}]
-            /\ UNCHANGED <<coreVars, temporalVars, fsmVars, invariantVars, censorVars>>
-            /\ UNCHANGED <<msgsPrevote, msgsPrecommit, msgsTimeout>>
-            /\ UNCHANGED <<evidence, action, receivedTimelyProposal, inspectedProposal>>
+        /\ msgsPropose[r] = {}
+        /\ LET
+               bad_da   == [published_block_height |-> 999, attestation |-> FALSE]
+               bad_prop == Proposal("TX_NORMAL", MIN_TIMESTAMP, r, state,
+                                    bad_da, h_btc_current, FALSE)
+               bad_msg  == [type       |-> "PROPOSAL",
+                            src        |-> Proposer[r],
+                            round      |-> r,
+                            proposal   |-> bad_prop,
+                            validRound |-> NilRound]
+           IN
+           /\ msgsPropose' = [msgsPropose EXCEPT ![r] = msgsPropose[r] \union {bad_msg}]
+           /\ UNCHANGED <<coreVars, temporalVars, fsmVars, invariantVars, censorVars>>
+           /\ UNCHANGED <<msgsPrevote, msgsPrecommit, msgsTimeout>>
+           /\ UNCHANGED <<evidence, action, receivedTimelyProposal, inspectedProposal>>
 
-(************************ CENSORSHIP RESISTANCE INJECTION *********************)
-SubmitToCelestiaDA == 
+
+\* Censorship Resistance: injects a new transaction into the forced inclusion queue
+SubmitToCelestiaDA ==
     \E tx \in ValidValues \ forced_tx_queue :
         /\ forced_tx_queue' = forced_tx_queue \union {tx}
         /\ UNCHANGED <<coreVars, temporalVars, bookkeepingVars, invariantVars, fsmVars>>
         /\ UNCHANGED <<tx_ignored_rounds>>
 
+
+(* ======================== NEXT-STATE RELATION ============================= *)
 (*
- * A system transition. In this specificatiom, the system may eventually deadlock,
- * e.g., when all processes decide. This is expected behavior, as we focus on safety.
+ * Note: the system may eventually deadlock (e.g., all processes decide).
+ * This is intentional — the spec focuses on safety, not liveness.
  *)
-TM_Next == 
-    \/ AdvanceRealTime 
-    \/ /\ SynchronizedLocalClocks 
-       /\ \E p \in Corr: MessageProcessing(p)
+TM_Next ==
+    \/ AdvanceRealTime
+    \/ /\ SynchronizedLocalClocks
+       /\ \E p \in Corr : MessageProcessing(p)
     \/ Byzantine_Data_Withholding
     \/ SubmitToCelestiaDA
 
-(* ======================== SAFETY INVARIANTS ============================== *)
-\* I1: All correct nodes that decide must agree on value
+
+(* ======================== SAFETY INVARIANTS =============================== *)
+\* TypeOK: type domain for all Tendermint-owned variables
+TypeOK ==
+    /\ \A p \in Corr :
+           /\ round[p]       \in Rounds
+           /\ step[p]        \in {"PROPOSE", "PREVOTE", "PRECOMMIT", "DECIDED"}
+           /\ decision[p]    \in Decisions \union {NilDecision}
+           /\ lockedValue[p] \in ValuesOrNil
+           /\ lockedRound[p] \in RoundsOrNil
+           /\ validValue[p]  \in Proposals \union {NilProposal}
+           /\ validRound[p]  \in RoundsOrNil
+    /\ \A r \in Rounds :
+           /\ \A m \in msgsPropose[r]   : m.round = r
+           /\ \A m \in msgsPrevote[r]   : m.round = r
+           /\ \A m \in msgsPrecommit[r] : m.round = r
+
+\* I1: All decided correct processes agree on the same value
 AgreementOnValue ==
-    \A p, q \in Corr:
+    \A p, q \in Corr :
         /\ decision[p] /= NilDecision
         /\ decision[q] /= NilDecision
         => decision[p].prop.value = decision[q].prop.value
 
-\* I2: Decided timestamp must fall within consensus round interval
+\* I2: Decided timestamp falls within the consensus round interval
 ConsensusTimeValid ==
-    \A p \in Corr:
-        decision[p] /= NilDecision
-        => LET r == decision[p].prop.round
-               t == decision[p].prop.timestamp
-           IN /\ beginRound[r] - Precision - Delay <= t
-              /\ t <= endConsensus[p] + Precision
+    \A p \in Corr :
+        decision[p] /= NilDecision =>
+            LET
+                r == decision[p].prop.round
+                t == decision[p].prop.timestamp
+            IN
+            /\ beginRound[r] - Precision - Delay <= t
+            /\ t <= endConsensus[p] + Precision
 
-\* I3: If proposer is correct, timestamp >= round begin time
+\* I3: If the proposer is correct, timestamp >= round begin time
 ConsensusSafeValidCorrProp ==
-    \A p \in Corr:
-        decision[p] /= NilDecision
-        => LET pr == decision[p].prop.round
-               t == decision[p].prop.timestamp
-           IN (Proposer[pr] \in Corr) => beginRound[pr] <= t
+    \A p \in Corr :
+        decision[p] /= NilDecision =>
+            LET
+                pr == decision[p].prop.round
+                t  == decision[p].prop.timestamp
+            IN
+            (Proposer[pr] \in Corr) => beginRound[pr] <= t
 
-\* I4: Decided proposal must pass IsValid checks (core safety gate)
+\* I4: Every decided proposal must pass the application-level validity predicate
 HybridSafety ==
-    \A p \in Corr:
+    \A p \in Corr :
         decision[p] /= NilDecision => IsValidProposal(decision[p].prop)
 
-\* I5: Only valid values (never invalid garbage) are decided
+\* I5: Only valid domain values can be decided (no garbage)
 ExternalValidity ==
-    \A p \in Corr:
+    \A p \in Corr :
         decision[p] /= NilDecision => decision[p].prop.value \in ValidValues
 
-(* ======================== EOTS SLASHING MECHANISM ======================== *)
-\* Double-Signing Evidence: Detects a node sending two different messages in the same round.
-DoubleSigningEvidence == 
-    \E r \in Rounds, p \in AllProcs :
-        \* Double-sign at the Prevote step
-        \/ \E m1, m2 \in msgsPrevote[r] : 
-            /\ m1.src = p 
-            /\ m2.src = p 
-            /\ m1.id /= m2.id
-        \* Double-sign at the Precommit step
-        \/ \E m1, m2 \in msgsPrecommit[r] : 
-            /\ m1.src = p 
-            /\ m2.src = p 
-            /\ m1.id /= m2.id
-        \* Double-sign at the Propose step
-        \/ \E m1, m2 \in msgsPropose[r] : 
-            /\ m1.src = p 
-            /\ m2.src = p 
-            /\ m1.proposal /= m2.proposal
 
-\* I6: Accountability: Fork => The double-signer has been found.
-Accountability == 
+(* ======================== EOTS SLASHING / ACCOUNTABILITY ================== *)
+\* Double-signing evidence: two distinct messages from the same process in the
+\* same round — triggers EOTS slashing in the Babylon layer.
+DoubleSigningEvidence ==
+    \E r \in Rounds, p \in AllProcs :
+        \/ \E m1, m2 \in msgsPrevote[r] :
+               /\ m1.src = p /\ m2.src = p /\ m1.id /= m2.id
+        \/ \E m1, m2 \in msgsPrecommit[r] :
+               /\ m1.src = p /\ m2.src = p /\ m1.id /= m2.id
+        \/ \E m1, m2 \in msgsPropose[r] :
+               /\ m1.src = p /\ m2.src = p /\ m1.proposal /= m2.proposal
+
+\* I6: Fork accountability — if agreement breaks, a double-signer exists
+Accountability ==
     (~AgreementOnValue) => DoubleSigningEvidence
 
-(* ======================== MASTER INVARIANTS =============================== *)
-\* Core consensus invariants (App-agnostic safety properties)
+
+(* ======================== MASTER INVARIANT ================================ *)
+\* Combine all core invariants for convenient TLC checking
 CoreTendermintInv ==
+    /\ TypeOK
     /\ AgreementOnValue
     /\ ConsensusTimeValid
     /\ ConsensusSafeValidCorrProp
-    /\ HybridSafety \* Keep this as it now just checks generic IsValidProposal
+    /\ HybridSafety
     /\ ExternalValidity
     /\ Accountability
 
-(* ======================== SPECIFICATION ==================================== *)
-\* Pure safety specification: no independent liveness requirements
+
+(* ======================== SPECIFICATION ================================== *)
+\* Pure safety spec — liveness fairness is handled in EngramServer
 TM_Spec == TM_Init /\ [][TM_Next]_tendermintVars
+
 =============================================================================

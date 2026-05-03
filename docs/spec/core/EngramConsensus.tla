@@ -1,4 +1,4 @@
------------------------ MODULE EngramConsensus -----------------------
+--------------------------- MODULE EngramConsensus ---------------------------
 EXTENDS Naturals, FiniteSets
 
 (********************* INTERFACE & CONSTANTS ************************)
@@ -32,7 +32,7 @@ SumStake[Q \in SUBSET Nodes] == SumStakeOp(Q)
 \* Precompute the set of valid Quorums once
 ValidQuorums == {q \in SUBSET Nodes : SumStake[q] * 3 > TotalStake * 2}
 
-isSQuorum(Q) == Q \in ValidQuorums
+IsSQuorum(Q) == Q \in ValidQuorums
 
 (********************* INITIALIZATION ***********************************) 
 Init == 
@@ -95,7 +95,7 @@ canElect(tr, c, Q, state_fsm) ==
 
 (********************* ADOB CORE OPERATIONS ***********************)
 Pull(n) == 
-    LET Q == CHOOSE q \in SUBSET Nodes : isSQuorum(q) 
+    LET Q == CHOOSE q \in SUBSET Nodes : IsSQuorum(q) 
         VirtualRoot == [type |-> "C", c_round |-> 0, voters |-> {}, btc_anchored |-> 0]
         ValidCaches == {c \in tree : c.type = "C"} \cup {VirtualRoot}
     IN \E Cmax \in ValidCaches: 
@@ -133,7 +133,7 @@ Invoke(n, m) ==
 
 
 Push(n) == 
-    LET Q == CHOOSE q \in SUBSET Nodes : isSQuorum(q) IN 
+    LET Q == CHOOSE q \in SUBSET Nodes : IsSQuorum(q) IN 
     /\ \E c \in tree : 
         /\ c.type = "M" 
         /\ c.caller = n 
