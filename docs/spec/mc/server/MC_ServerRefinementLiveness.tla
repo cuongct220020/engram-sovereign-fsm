@@ -33,21 +33,21 @@ MC_Proposer == [r \in 0..5 |-> MC_NodeSeq[(r % 4) + 1]]
 
 
 (* ======================== INIT & NEXT ==================================== *)
-MC_Server_Init == Server_Init
-MC_Server_Next == Server_Next
+MC_ServerInit == ServerInit
+MC_ServerNext == ServerNext
 
 
 (* ======================== FAIRNESS CONDITIONS ============================ *)
 \* Weak fairness on time advance ensures clocks always eventually tick.
 \* Weak fairness on message processing ensures every enabled action
 \* eventually fires (prevents "unfair" stuttering in liveness proofs).
-MC_Server_Fairness ==
-    /\ WF_serverVars(Server_AdvanceRealTime)
-    /\ \A p \in MC_Corr : WF_serverVars(Server_MessageProcessing(p))
+MC_ServerFairness ==
+    /\ WF_serverVars(ServerAdvanceRealTime)
+    /\ \A p \in MC_Corr : WF_serverVars(ServerMessageProcessing(p))
 
 \* Full liveness specification: safety behaviour + fairness assumptions
-MC_Server_Spec ==
-    MC_Server_Init /\ [][MC_Server_Next]_serverVars /\ MC_Server_Fairness
+MC_ServerSpec ==
+    MC_ServerInit /\ [][MC_ServerNext]_serverVars /\ MC_ServerFairness
 
 
 (* ======================== STATE SPACE PRUNING CONSTRAINT ================= *)

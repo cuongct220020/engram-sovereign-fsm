@@ -4,9 +4,9 @@
  *
  * Bridges the abstract Tendermint BFT core (EngramTendermint) with the
  * Engram-specific application logic:
- *   - FSM-aware proposal construction (Server_InsertProposal)
+ *   - FSM-aware proposal construction (ServerInsertProposal)
  *   - LiDO certificate generation (E_QC, M_QC, T_QC)
- *   - Post-decision FSM state synchronisation (Server_UponProposalInPrecommitNoDecision)
+ *   - Post-decision FSM state synchronisation (ServerUponProposalInPrecommitNoDecision)
  *   - Hybrid safety invariants (FSM <-> consensus cross-checks)
  *   - Liveness properties under GST
  *
@@ -38,7 +38,7 @@ GlobalDecisionExists ==
 \*
 \* State-space control: all non-determinism over ValidValues, proof_search_space,
 \* and validValue is resolved HERE, before entering the black-box Tendermint core.
-Server_InsertProposal(p) ==
+ServerInsertProposal(p) ==
     /\ ~GlobalDecisionExists
     /\ p = Proposer[round[p]]
     /\ step[p] = "PROPOSE"
@@ -81,11 +81,11 @@ Server_InsertProposal(p) ==
     /\ UNCHANGED <<coreVars, temporalVars>>
     /\ UNCHANGED <<msgs_prevote, msgs_precommit, msgs_timeout,
                    evidence, received_timely_proposal, inspected_proposal>>
-    /\ action' = "Server_InsertProposal"
+    /\ action' = "ServerInsertProposal"
 
 
 \* Hook 2: Proposer votes for its own proposal → emits M_QC (maps to Abstract Invoke).
-Server_ProposerVotes(p) ==
+ServerProposerVotes(p) ==
     /\ \/ UponProposalInPropose(p)
        \/ UponProposalInProposeAndPrevote(p)
     /\ IF p = Proposer[round[p]]
@@ -105,7 +105,7 @@ Server_ProposerVotes(p) ==
        ELSE
            /\ qcs' = qcs
            /\ tcs' = tcs
-    /\ action' = "Server_ProposerVotes"
+    /\ action' = "ServerProposerVotes"
 
 
 \* Hook 3: Intercept the decision moment -> trigger FSM transition + state sync.
@@ -113,7 +113,7 @@ Server_ProposerVotes(p) ==
 \* On every block commit, the decided proposal's FSM state, BTC anchor, and
 \* DA receipt are written back into the local sensor variables so that the
 \* next proposal reflects the globally agreed-upon chain view.
-Server_UponProposalInPrecommitNoDecision(p) ==
+ServerUponProposalInPrecommitNoDecision(p) ==
     \* Step 1: Execute core Tendermint decision logic
     /\ UponProposalInPrecommitNoDecision(p)
 
@@ -154,11 +154,11 @@ Server_UponProposalInPrecommitNoDecision(p) ==
 
     \* Step 6: Keep pacemaker certificates and censorship sensor unchanged
     /\ UNCHANGED <<qcs, tcs, censorVars>>
-    /\ action' = "Server_UponProposalInPrecommitNoDecision"
+    /\ action' = "ServerUponProposalInPrecommitNoDecision"
 
 
 \* Hook 4: 2f+1 timeout votes -> emit T_QC (maps to Abstract Timeout) + advance round.
-Server_UponTimeoutCert(p) ==
+ServerUponTimeoutCert(p) ==
     \* Check timeout quorum
     /\  LET UniqueSenders == { m.src : m \in msgs_timeout[round[p]] }
         IN Cardinality(UniqueSenders) >= THRESHOLD2
@@ -181,56 +181,67 @@ Server_UponTimeoutCert(p) ==
     /\ UNCHANGED <<decision, locked_value, locked_round, valid_value, valid_round>>
     /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout,
                    evidence, received_timely_proposal, inspected_proposal>>
-    /\ action' = "Server_UponTimeoutCert"
+    /\ action' = "ServerUponTimeoutCert"
 
 
 (* ======================== ACTION AGGREGATION ============================== *)
 \* Pass-through: Tendermint actions that require no Server-layer interception.
-Server_PassThrough(p) ==
+ServerPassThrough(p) ==
     \/ ReceiveProposal(p)
     \/ UponProposalInPrevoteOrCommitAndPrevote(p)
     \/ UponQuorumOfPrevotesAny(p)
     \/ /\ UponQuorumOfPrecommitsAny(p)
        /\ ~GlobalDecisionExists
-    \/ Server_UponProposalInPrecommitNoDecision(p)
+    \/ ServerUponProposalInPrecommitNoDecision(p)
     \/ OnTimeoutPropose(p)
     \/ OnQuorumOfNilPrevotes(p)
     \/ OnRoundCatchup(p)
     \/ UponfPlusOneTimeoutsAny(p)
 
-Server_MessageProcessing(p) ==
-    \/ /\ Server_PassThrough(p)
+ServerMessageProcessing(p) ==
+    \/ /\ ServerPassThrough(p)
        /\ UNCHANGED <<qcs, tcs, fsmVars>>
-    \/ Server_InsertProposal(p)
-    \/ Server_ProposerVotes(p)
+    \/ ServerInsertProposal(p)
+    \/ ServerProposerVotes(p)
 
 
 (* ======================== SPECIFICATION (INIT & NEXT) ===================== *)
-Server_Init ==
-    /\ TM_Init
-    /\ FSM_Init
+ServerInit ==
+    /\ TendermintInit
+    /\ FSMInit
     /\ qcs = {}
     /\ tcs = {}
 
-Server_AdvanceRealTime ==
+ServerAdvanceRealTime ==
     /\ AdvanceRealTime
     /\ UNCHANGED <<qcs, tcs, fsmVars>>
 
-Server_Byzantine_Data_Withholding ==
+ServerByzantineDataWithholding ==
     /\ Byzantine_Data_Withholding
     /\ UNCHANGED <<qcs, tcs, fsmVars>>
 
-Server_Next ==
-    \/ Server_AdvanceRealTime
+ServerNext ==
+    \/ ServerAdvanceRealTime
     \/ /\ SynchronizedLocalClocks
-       /\ \E p \in Corr : Server_MessageProcessing(p)
+       /\ \E p \in Corr : ServerMessageProcessing(p)
     \/ /\ UpdateSensors
        /\ UNCHANGED <<coreVars, temporalVars, invariantVars, bookkeepingVars, censorVars>>
        /\ UNCHANGED <<action, qcs, tcs>>
-    \/ Server_Byzantine_Data_Withholding
+    \/ ServerByzantineDataWithholding
 
-Server_Spec == Server_Init /\ [][Server_Next]_serverVars
+ServerSpec == ServerInit /\ [][ServerNext]_serverVars
 
+
+(* ======================== MONOTONICITY SAFETY ======================== *)
+\* Chain heights and real time must monotonically increase or remain constant.
+\* This temporal property ensures the model is immune to time-travel or 
+\* chain rollback anomalies, preventing Long-Range Attacks.
+MonotonicitySafety == 
+    [][ /\ h_btc_current'    >= h_btc_current
+        /\ h_btc_anchored'   >= h_btc_anchored
+        /\ h_engram_current' >= h_engram_current
+        /\ real_time'        >= real_time 
+      ]_serverVars
 
 (* ======================== HYBRID INVARIANTS =============================== *)
 \* Cross-layer consistency checks: every decided proposal must agree with the
@@ -263,7 +274,7 @@ ZKProofConsistency ==
         => decision[p].prop.zk_proof_ref = TRUE
 
 \* Master hybrid invariant — checked together with CoreTendermintInv in TLC
-HybridTendermintInv ==
+HybridTendermintInvariant ==
     /\ FSMStateConsistency
     /\ DAReceiptConsistency
     /\ BTCConsistency
@@ -290,13 +301,13 @@ ForcedInclusionLiveness ==
                   decision[p] /= NilDecision /\ decision[p].prop.value = tx)
 
 \* Global Stabilisation Time predicate: clocks sync + enough peers + ANCHORED
-GST_Reached ==
+GSTReached ==
     /\ SynchronizedLocalClocks
     /\ Cardinality(active_peers) >= MIN_PEERS
     /\ state = "ANCHORED"
 
 \* Under repeated GST, the system must eventually reach a decision
 EventualDecisionUnderGST ==
-    ([]<> GST_Reached) ~> (\E p \in Corr : step[p] = "DECIDED")
+    ([]<> GSTReached) ~> (\E p \in Corr : step[p] = "DECIDED")
 
 ===================================================================

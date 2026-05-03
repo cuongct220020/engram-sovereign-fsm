@@ -32,8 +32,8 @@ MC_Proposer == [r \in 0..5 |-> MC_NodeSeq[(r % 4) + 1]]
 
 
 (* ======================== INIT & NEXT ==================================== *)
-MC_Server_Init == Server_Init
-MC_Server_Next == Server_Next
+MC_ServerInit == ServerInit
+MC_ServerNext == ServerNext
 
 
 (* ======================== STATE SPACE PRUNING CONSTRAINT ================= *)

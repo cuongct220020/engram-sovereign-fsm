@@ -80,7 +80,10 @@ IsDAHealthy == (da_gap < DA_THRESHOLD) /\ ~is_das_failed
 \* Bitcoin settlement gap: distance from current tip to last confirmed anchor
 btc_gap == h_btc_current - MinVal(h_btc_submitted, h_btc_anchored)
 
-IsBTCGapSuspicious == (SUSPICIOUS_THRESHOLD <= btc_gap) /\ (btc_gap < SOVEREIGN_THRESHOLD)
+IsBTCGapSuspicious == 
+    /\ SUSPICIOUS_THRESHOLD <= btc_gap 
+    /\ (btc_gap < SOVEREIGN_THRESHOLD)
+
 IsBTCGapSovereign == btc_gap >= SOVEREIGN_THRESHOLD
 
 
@@ -106,7 +109,7 @@ IsHealthyCondition ==
 
 
 (* ======================== TYPE INVARIANT & SANITY CHECK ================================== *)
-TypeInvariant == 
+FSMTypeOK == 
     /\ state \in {"ANCHORED", "SUSPICIOUS", "SOVEREIGN", "RECOVERING"}
     /\ btc_gap >= 0
     /\ da_gap >= 0
@@ -125,7 +128,7 @@ SanityCheck == state /= "RECOVERING"
 
 
 (* ======================== STATE MACHINE INITIALIZATION ================================== *)
-FSM_Init == 
+FSMInit == 
     /\ state = "ANCHORED"
     /\ h_btc_current = 0
     /\ h_btc_submitted = 0
@@ -232,7 +235,7 @@ ExecuteFSMTransition(target_state) ==
                 ELSE 0
 
 (* ======================== THE NEXT-STATE ACTION (FOR UNIT TEST) ============ *)
-FSM_Next == 
+FSMNext == 
     \/ /\ UpdateSensors
     \/ /\ state' = CalculateNextFSMState 
        /\ state' /= state
@@ -240,7 +243,7 @@ FSM_Next ==
        /\ UNCHANGED <<envVars>> 
 
 
-FSM_Spec == FSM_Init /\ [][FSM_Next]_fsmVars
+FSMSpec == FSMInit /\ [][FSMNext]_fsmVars
 
 
 (* ======================== SAFETY PROPERTIES ============================== *)
@@ -252,6 +255,15 @@ CircuitBreakerSafety ==
 HysteresisSafety ==
     [][ (state = "RECOVERING" /\ state' = "ANCHORED")
         => (safe_blocks = HYSTERESIS_WAIT /\ reanchoring_proof_valid) ]_fsmVars
+
+\* Safety 3: Prevents any illegal or out-of-order FSM state transitions.
+StrictFSMTransitionSafety == 
+    [][ state /= state' => 
+        \/ (state = "ANCHORED"   /\ state' \in {"SUSPICIOUS", "SOVEREIGN"})
+        \/ (state = "SUSPICIOUS" /\ state' \in {"ANCHORED", "SOVEREIGN"})
+        \/ (state = "SOVEREIGN"  /\ state' = "RECOVERING")
+        \/ (state = "RECOVERING" /\ state' \in {"ANCHORED", "SOVEREIGN"})
+      ]_fsmVars
 
 
 (* ======================== LIVENESS PROPERTIES ============================ *)
@@ -268,5 +280,13 @@ RecoveryAttemptLiveness ==
 CompleteRecoveryLiveness ==
     (state = "RECOVERING" /\ reanchoring_proof_valid /\ IsHealthyCondition)
     ~> (state = "ANCHORED" \/ ~IsHealthyCondition \/ ~reanchoring_proof_valid)
+
+\* Liveness 4: ZK proof must eventually be generated during recovery under healthy conditions.
+ZKProofGenerationLiveness == 
+    (state = "RECOVERING" /\ IsHealthyCondition) ~> (reanchoring_proof_valid = TRUE)
+
+\* Liveness 5: Persistent network anomalies must eventually trigger a circuit-break or recovery.
+PersistentEclipseResolution == 
+    ([]<> ~IsP2PQualityHealthy) ~> (state \in {"SOVEREIGN", "ANCHORED"})
 
 =============================================================================

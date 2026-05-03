@@ -8,7 +8,7 @@
  * Refinement structure (per the conventions document):
  *   1. Mapping functions: translate concrete variables → abstract variables
  *   2. INSTANCE:  AbstractConsensus == INSTANCE EngramConsensus WITH ...
- *   3. Theorem:   Server_Spec => AbstractConsensus!Spec
+ *   3. Theorem:   ServerSpec => AbstractConsensus!Spec
  *
  * Key design decision — Homogeneous Stake:
  *   Instead of tracking arbitrary stake weights (which would add a variable
@@ -151,10 +151,10 @@ QuorumOverlap ==
     \A q1, q2 \in AbstractConsensus!ValidQuorums :
         (q1 \intersect q2) \intersect Corr /= {}
 
-\* \* RefinementSafety:  concrete Server_Spec satisfies the abstract Safety spec
+\* \* RefinementSafety:  concrete ServerSpec satisfies the abstract Safety spec
 \* RefinementSafety   == AbstractConsensus!Safety
 
-\* \* RefinementLiveness: concrete Server_Spec satisfies the abstract Liveness spec
+\* \* RefinementLiveness: concrete ServerSpec satisfies the abstract Liveness spec
 \* RefinementLiveness == AbstractConsensus!Liveness
 
 =============================================================================

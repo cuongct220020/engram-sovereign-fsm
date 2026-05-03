@@ -357,7 +357,7 @@ BenignRoundsInMessages(msgfun) ==
       r = m.round
 
 \* Initial state — some Byzantine messages may already be present
-TM_Init ==
+TendermintInit ==
     /\ round              = [p \in Corr |-> 0]
     /\ local_clock       \in [Corr -> MIN_TIMESTAMP..(MIN_TIMESTAMP + PRECISION)]
     /\ local_rem_time     = [p \in Corr |-> TIMEOUT_DURATION]
@@ -846,7 +846,7 @@ SubmitToCelestiaDA ==
  * Note: the system may eventually deadlock (e.g., all processes decide).
  * This is intentional — the spec focuses on safety, not liveness.
  *)
-TM_Next ==
+TendermintNext ==
     \/ AdvanceRealTime
     \/ /\ SynchronizedLocalClocks
        /\ \E p \in Corr : MessageProcessing(p)
@@ -855,8 +855,8 @@ TM_Next ==
 
 
 (* ======================== SAFETY INVARIANTS =============================== *)
-\* TypeOK: type domain for all Tendermint-owned variables
-TypeOK ==
+\* TendermintTypeOK: type domain for all Tendermint-owned variables
+TendermintTypeOK ==
     /\ \A p \in Corr :
            /\ round[p]       \in Rounds
            /\ step[p]        \in {"PROPOSE", "PREVOTE", "PRECOMMIT", "DECIDED"}
@@ -926,20 +926,35 @@ Accountability ==
     (~AgreementOnValue) => DoubleSigningEvidence
 
 
+(* ======================== NO CROSS-MODE DOUBLE SPENDING ================= *)
+\* A Sovereign decision (Soft-finality) must never overwrite or conflict with 
+\* a Proposal already anchored to Bitcoin (Hard-finality).
+NoCrossModeDoubleSpending ==
+    \A p \in Corr, q \in Corr :
+        /\ decision[p] /= NilDecision
+        /\ decision[q] /= NilDecision
+        /\ decision[p].prop.btc_receipt.checkpoint_block_height <= h_btc_anchored
+        /\ decision[q].prop.fsm_state = "SOVEREIGN"
+        => 
+        \* Sovereign decisions must strictly succeed the anchored history
+        decision[q].prop.round > decision[p].prop.round
+
+
 (* ======================== MASTER INVARIANT ================================ *)
 \* Combine all core invariants for convenient TLC checking
-CoreTendermintInv ==
-    /\ TypeOK
+CoreTendermintInvariant ==
+    /\ TendermintTypeOK
     /\ AgreementOnValue
     /\ ConsensusTimeValid
     /\ ConsensusSafeValidCorrProp
     /\ HybridSafety
     /\ ExternalValidity
     /\ Accountability
+    /\ NoCrossModeDoubleSpending
 
 
 (* ======================== SPECIFICATION ================================== *)
 \* Pure safety spec — liveness fairness is handled in EngramServer
-TM_Spec == TM_Init /\ [][TM_Next]_tendermintVars
+TendermintSpec == TendermintInit /\ [][TendermintNext]_tendermintVars
 
 =============================================================================
