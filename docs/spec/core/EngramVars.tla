@@ -13,7 +13,7 @@
 
 CONSTANTS
     HYSTERESIS_WAIT,    \* Consecutive safe blocks required for successful recovery
-    T_DA                \* Max allowed block gap since last DA publication verification
+    DA_THRESHOLD        \* Max allowed block gap since last DA publication verification
 
 
 (* ======================== TENDERMINT CORE VARIABLES ======================== *)
@@ -22,12 +22,12 @@ VARIABLES
     round,          \* Current consensus round of each correct process
     step,           \* Current step: "PROPOSE" | "PREVOTE" | "PRECOMMIT" | "DECIDED"
     decision,       \* Decided value (NilDecision if not yet decided)
-    lockedValue,    \* Value locked by the process in the last lock round
-    lockedRound,    \* Round in which lockedValue was locked
-    validValue,     \* Most recent valid proposal seen
-    validRound      \* Round in which validValue was observed
+    locked_value,   \* Value locked by the process in the last lock round
+    locked_round,    \* Round in which locked_value was locked
+    valid_value,     \* Most recent valid proposal seen
+    valid_round      \* Round in which valid_value was observed
 
-coreVars == <<round, step, decision, lockedValue, lockedRound, validValue, validRound>>
+coreVars == <<round, step, decision, locked_value, locked_round, valid_value, valid_round>>
 
 
 (* ======================== TEMPORAL / CLOCK VARIABLES ======================= *)
@@ -43,63 +43,85 @@ temporalVars == <<local_clock, real_time, local_rem_time>>
 (* ======================== BOOKKEEPING VARIABLES ============================ *)
 \* Message buffers and audit log.
 VARIABLES
-    msgsPropose,              \* Proposal messages indexed by round
-    msgsPrevote,              \* Prevote messages indexed by round
-    msgsPrecommit,            \* Precommit messages indexed by round
-    msgsTimeout,              \* Timeout messages indexed by round
-    evidence,                 \* Set of collected evidence (for accountability)
-    action,                   \* String label of last executed action (for TLC tracing)
-    receivedTimelyProposal,   \* Per-process set of timely proposal messages
-    inspectedProposal         \* Per-(round,process) timestamp of last inspection
+    msgs_propose,               \* Proposal messages indexed by round
+    msgs_prevote,               \* Prevote messages indexed by round
+    msgs_precommit,             \* Precommit messages indexed by round
+    msgs_timeout,               \* Timeout messages indexed by round
+    evidence,                   \* Set of collected evidence (for accountability)
+    action,                     \* String label of last executed action (for TLC tracing)
+    received_timely_proposal,   \* Per-process set of timely proposal messages
+    inspected_proposal          \* Per-(round,process) timestamp of last inspection
 
 bookkeepingVars ==
-    <<msgsPropose, msgsPrevote, msgsPrecommit, msgsTimeout,
-      evidence, action, receivedTimelyProposal, inspectedProposal>>
+    <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout,
+      evidence, action, received_timely_proposal, inspected_proposal>>
 
 
 (* ======================== INVARIANT SUPPORT VARIABLES ====================== *)
 \* Ghost variables used exclusively to express timing invariants.
 \* These are never read by the protocol logic itself.
 VARIABLES
-    beginRound,            \* Earliest local clock when any process entered round r
-    endConsensus,          \* Local clock when process p decided
-    lastBeginRound,        \* Latest local clock when any process entered round r
-    proposalTime,          \* Real time at which the proposal for round r was broadcast
-    proposalReceivedTime   \* Real time at which the first timely proposal was received
+    begin_round,            \* Earliest local clock when any process entered round r
+    end_consensus,          \* Local clock when process p decided
+    last_begin_round,        \* Latest local clock when any process entered round r
+    proposal_time,          \* Real time at which the proposal for round r was broadcast
+    proposal_received_time   \* Real time at which the first timely proposal was received
 
-invariantVars ==
-    <<beginRound, endConsensus, lastBeginRound,
-      proposalTime, proposalReceivedTime>>
+invariantVars == 
+    <<begin_round, end_consensus, last_begin_round, 
+        proposal_time, proposal_received_time>>
 
 
-(* ======================== FSM & ENVIRONMENT VARIABLES ====================== *)
-\* Circuit-breaker FSM state and all environment sensor readings.
-VARIABLES
-    state,                   \* FSM state: "ANCHORED"|"SUSPICIOUS"|"SOVEREIGN"|"RECOVERING"
-    h_btc_current,           \* Latest observed Bitcoin block height
-    h_btc_submitted,         \* Height at which the ZK re-anchoring proof was submitted
-    h_btc_anchored,          \* Last confirmed Engram checkpoint height on Bitcoin
-    h_engram_current,        \* Latest Engram chain block height
-    h_engram_verified,       \* Last DA-verified Engram block height
-    is_das_failed,           \* Boolean: DAS failure flag from Blobstream
+(* ======================== P2P HEALTH SENSOR ================================ *)
+VARIABLES 
     active_peers,            \* Set of currently connected peers
     anchor_peers,            \* Statically configured bootstrap/anchor peer set
     blacklisted_peers,       \* Peers identified as malicious and blacklisted
+    peer_churn_rate,         \* Interference/disconnection rate in the routing table
+    avg_peer_tenure,         \* Average age of current connections
+    peer_latency             \* Average block/heartbeat transmission latency
+
+p2pSensorVars == 
+    <<active_peers, anchor_peers, blacklisted_peers, 
+        peer_churn_rate, avg_peer_tenure, peer_latency>>
+
+
+(* ======================== DA SENSOR ======================================== *)
+VARIABLES 
+    h_engram_current,        \* Latest Engram chain block height
+    h_engram_verified,       \* Last DA-verified Engram block height
+    is_das_failed,           \* DAS failure flag from Blobstream
+
+daSensorVars == <<h_engram_current, h_engram_verified, is_das_failed>>
+
+(* ======================== BTC FINALITY GAP SENSOR ========================== *)
+VARIABLES
+    h_btc_current,           \* Latest observed Bitcoin block height
+    h_btc_submitted,         \* Height at which the ZK re-anchoring proof was submitted
+    h_btc_anchored,          \* Last confirmed Engram checkpoint height on Bitcoin
+
+btcSensorVars == <<h_btc_current, h_btc_submitted, h_btc_anchored>>
+
+
+(* ======================== FSM VARIABLES ====================== *)
+\* Circuit-breaker FSM state
+VARIABLES
+    state,                   \* FSM state: "ANCHORED"|"SUSPICIOUS"|"SOVEREIGN"|"RECOVERING"
     safe_blocks,             \* Consecutive healthy blocks counted during RECOVERING
     reanchoring_proof_valid, \* Boolean: ZK re-anchoring proof confirmed on-chain
-    forced_tx_queue,         \* Transactions pending forced inclusion (censorship resistance)
-    tx_ignored_rounds        \* Per-(process,tx) counter of rounds where tx was ignored
-
-\* Sub-tuples for granular UNCHANGED grouping
-btcSensorVars  == <<h_btc_current, h_btc_submitted, h_btc_anchored>>
-daSensorVars   == <<h_engram_current, h_engram_verified, is_das_failed>>
-p2pSensorVars  == <<active_peers, anchor_peers, blacklisted_peers>>
-censorVars     == <<forced_tx_queue, tx_ignored_rounds>>
 
 \* Top-level FSM tuple consumed by EngramTendermint actions
 fsmVars ==
-    <<state, btcSensorVars, daSensorVars, p2pSensorVars,
-      safe_blocks, reanchoring_proof_valid>>
+    <<state, safe_blocks, reanchoring_proof_valid, 
+        btcSensorVars, daSensorVars, p2pSensorVars>>
+
+
+(* ======================== CENSORSHIP VARIABLES ======================= *)
+VARIABLES
+    forced_tx_queue,         \* Transactions pending forced inclusion (censorship resistance)
+    tx_ignored_rounds        \* Per-(process,tx) counter of rounds where tx was ignored
+
+censorVars == <<forced_tx_queue, tx_ignored_rounds>>
 
 \* Environment-only tuple consumed by EngramFSM (excludes consensus state)
 envVars ==

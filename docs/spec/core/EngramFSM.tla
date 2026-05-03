@@ -13,42 +13,40 @@ EXTENDS Integers, FiniteSets, EngramVars
 
 (* ======================== CONSTANTS & ASSUMPTIONS ========================= *)
 CONSTANTS
-    T_SUSPICIOUS,           \* BTC gap threshold for Gray Failure warning
-    T_SOVEREIGN,            \* BTC gap threshold for Hard Failure (circuit-break)
+    SUSPICIOUS_THRESHOLD,   \* BTC gap threshold for Gray Failure warning
+    SOVEREIGN_THRESHOLD,    \* BTC gap threshold for Hard Failure (circuit-break)
     MIN_PEERS,              \* Minimum clean peers required to avoid isolation
     MIN_SUBNET_DIVERSITY,   \* Minimum distinct subnets required
     MIN_ANCHOR_PEERS        \* Minimum active anchor/bootstrap peers required
+    MAX_CHURN_RATE,         \* Maximum allowed peer disconnects/reconnects per epoch
+    MIN_AVG_TENURE,         \* Minimum average age of connections in the routing table
+    MAX_PEER_LATENCY        \* Maximum allowable delay for heartbeat/block propagation
 
 ASSUME
-    /\ T_SUSPICIOUS      \in Nat
-    /\ T_SOVEREIGN       \in Nat
-    /\ T_DA              \in Nat
+    /\ SUSPICIOUS_THRESHOLD \in Nat
+    /\ SOVEREIGN_THRESHOLD \in Nat
+    /\ DA_THRESHOLD \in Nat
     /\ HYSTERESIS_WAIT   \in Nat
     /\ MIN_PEERS         \in Nat
     /\ MIN_SUBNET_DIVERSITY \in Nat
     /\ MIN_ANCHOR_PEERS  \in Nat
-    /\ T_SUSPICIOUS < T_SOVEREIGN
+    /\ MAX_CHURN_RATE \in Nat
+    /\ MIN_AVG_TENURE \in Nat
+    /\ MAX_PEER_LATENCY \in Nat
+    /\ SUSPICIOUS_THRESHOLD < SOVEREIGN_THRESHOLD
 
-
-(* ======================== DERIVED SENSOR GAPS ============================= *)
 \* Helper: returns the smaller of two integers
 MinVal(a, b) == IF a < b THEN a ELSE b
 
-\* Bitcoin settlement gap: distance from current tip to last confirmed anchor
-btc_gap == h_btc_current - MinVal(h_btc_submitted, h_btc_anchored)
 
-\* Data Availability gap: unverified Engram blocks since last DA proof
-da_gap == h_engram_current - h_engram_verified
-
-
-(* ======================== P2P QUALITY SENSOR ============================== *)
-\* Map virtual peer IDs to /24 subnets so TLC can compute SubnetDiversity.
-\* Extend this CASE table to add new peer scenarios.
-SubnetOf(p) ==
+(* ======================== P2P HEALTH SENSOR =============================== *)
+SubnetOf(p) == 
     CASE p = "anchor_n1"                             -> "subnet_A"
       [] p = "anchor_n2"                             -> "subnet_B"
       [] p = "anchor_n3"                             -> "subnet_C"
       [] p \in {"sybil_n1", "sybil_n2", "sybil_n3"}  -> "subnet_malicious"
+      [] p = "honest_node_1"                         -> "subnet_D"
+      [] p = "honest_node_2"                         -> "subnet_E"
       [] OTHER                                       -> "unknown_subnet"
 
 \* Number of distinct subnets represented in active_peers
@@ -62,31 +60,50 @@ CleanPeers == active_peers \ blacklisted_peers
 
 \* Composite P2P health predicate
 IsP2PQualityHealthy ==
-    /\ SubnetDiversity             >= MIN_SUBNET_DIVERSITY  \* Not concentrated on a single IP block
-    /\ Cardinality(ActiveAnchors)  >= MIN_ANCHOR_PEERS      \* Maintains connection with root nodes
-    /\ Cardinality(CleanPeers)     >= MIN_PEERS             \* Sufficient non-malicious peers
+    /\ SubnetDiversity            >= MIN_SUBNET_DIVERSITY   \* Not concentrated on a single IP block
+    /\ Cardinality(ActiveAnchors) >= MIN_ANCHOR_PEERS       \* Maintains connection with root nodes
+    /\ Cardinality(CleanPeers)    >= MIN_PEERS              \* Sufficient non-malicious peers
+    /\ peer_churn_rate            <= MAX_CHURN_RATE         \* The routing table is not constantly being shuffled.
+    /\ avg_peer_tenure            >= MIN_AVG_TENURE         \* All peers are "long-lived" nodes.
+    /\ peer_latency               <= MAX_PEER_LATENCY       \* No indication of routing through the Relay node.
 
 
-(* ======================== HEALTH CONDITION PREDICATES ===================== *)\* Withdrawal guard: TRUE whenever cross-chain withdrawals must be halted
-WithdrawLocked == state \in {"SOVEREIGN", "RECOVERING"}
+(* ======================== DATA AVAILABILITY SENSOR ======================================= *)
+\* Data Availability gap: unverified Engram blocks since last DA proof
+da_gap == h_engram_current - h_engram_verified
 
 \* DA layer is publishing proofs within the allowed gap
 IsDAHealthy == (da_gap < T_DA) /\ ~is_das_failed
 
+
+(* ======================== BTC FINALITY GAP SENSOR ========================= *)
+\* Bitcoin settlement gap: distance from current tip to last confirmed anchor
+btc_gap == h_btc_current - MinVal(h_btc_submitted, h_btc_anchored)
+
+IsBTCGapSuspicious == (SUSPICIOUS_THRESHOLD <= btc_gap) /\ (btc_gap < SOVEREIGN_THRESHOLD)
+IsBTCGapSovereign == btc_gap >= SOVEREIGN_THRESHOLD
+
+
+(* ======================== HEALTH CONDITION PREDICATES ===================== *)
+\* Withdrawal guard: TRUE whenever cross-chain withdrawals must be halted
+WithdrawLocked == state \in {"SOVEREIGN", "RECOVERING"}
+
 \* Hard failure: BTC gap has crossed the sovereign threshold
-IsCriticalCondition == btc_gap >= T_SOVEREIGN
+IsCriticalCondition == IsBTCGapSovereign
 
 \* Soft warning: BTC gap is elevated, or DA/P2P shows degradation
-IsWarningCondition ==
-    \/ (T_SUSPICIOUS <= btc_gap /\ btc_gap < T_SOVEREIGN)
+IsWarningCondition == 
+    \/ IsBTCGapSuspicious
     \/ ~IsDAHealthy
     \/ ~IsP2PQualityHealthy
 
 \* All sensors are green and thresholds are satisfied
-IsHealthyCondition ==
-    /\ btc_gap < T_SUSPICIOUS
+IsHealthyCondition == 
+    /\ ~IsBTCGapSovereign
+    /\ ~IsBTCGapSuspicious
     /\ IsDAHealthy
     /\ IsP2PQualityHealthy
+
 
 (* ======================== TYPE INVARIANT & SANITY CHECK ================================== *)
 TypeInvariant == 
@@ -97,6 +114,7 @@ TypeInvariant ==
     /\ IsFiniteSet(active_peers)
     /\ IsFiniteSet(anchor_peers)
     /\ IsFiniteSet(blacklisted_peers)
+    /\ peer_churn_rate \in Nat /\ avg_peer_tenure \in Nat /\ peer_latency \in Nat
     /\ safe_blocks \in 0..HYSTERESIS_WAIT
     /\ reanchoring_proof_valid \in BOOLEAN
 
@@ -118,53 +136,69 @@ FSM_Init ==
     /\ anchor_peers = {"anchor_n1", "anchor_n2", "anchor_n3"}
     /\ active_peers = anchor_peers
     /\ blacklisted_peers = {}
+    /\ peer_churn_rate = 0 /\ avg_peer_tenure = MIN_AVG_TENURE /\ peer_latency = 0
     /\ safe_blocks = 0
     /\ reanchoring_proof_valid = FALSE
 
 
+
 (* ======================== ENVIRONMENT SENSOR UPDATE ======================= *)
-\* Non-deterministic environment update that simulates the real network.
-\* Heights are monotonically non-decreasing; P2P state picks one of 4 scenarios.
-UpdateSensors ==
-    \* -- Bitcoin heights (monotone) --
+\* Update BTC Finality Gap Sensor
+UpdateBTCSensor == 
     /\ h_btc_current'   \in {h_btc_current,   h_btc_current + 1}
-    /\ h_btc_submitted' \in {h_btc_submitted,  h_btc_current'}
-    /\ h_btc_anchored'  \in {h_btc_anchored,   h_btc_submitted'}
+    /\ h_btc_submitted' \in {h_btc_submitted, h_btc_current'}
+    /\ h_btc_anchored'  \in {h_btc_anchored,  h_btc_submitted'}
+    /\ UNCHANGED <<state, daSensorVars, p2pSensorVars, safe_blocks, reanchoring_proof_valid>>
 
-    \* -- Engram DA heights (monotone) --
-    /\ h_engram_current'  \in {h_engram_current,  h_engram_current + 1}
+\* Update DA Sensor
+UpdateDASensor == 
+    /\ h_engram_current' \in {h_engram_current, h_engram_current + 1}
     /\ h_engram_verified' \in {h_engram_verified, h_engram_current'}
+    /\ is_das_failed' \in BOOLEAN
+    /\ UNCHANGED <<state, btcSensorVars, p2pSensorVars, safe_blocks>>
 
-    \* -- ZK re-anchoring proof validity --
-    \* Proof becomes valid only once the Bitcoin anchor has caught up to
-    \* the submission height (i.e., the OP_RETURN tx is confirmed).
+
+\* Update P2P Health Sensor
+P2PNormalUpdate == 
+    /\ active_peers' \in SUBSET (anchor_peers \cup {"honest_n1", "honest_n2"})
+    /\ peer_churn_rate' \in 0..MAX_CHURN_RATE
+    /\ avg_peer_tenure' \in MIN_AVG_TENURE..(MIN_AVG_TENURE + 100)
+    /\ peer_latency'    \in 0..MAX_PEER_LATENCY
+
+
+P2PAdversaryAttack ==
+    /\ \E p \in active_peers : 
+        /\ p \notin ActiveAnchors  \* Abstraction: Test-before-evict bảo vệ Anchor nodes
+        /\ active_peers' = (active_peers \ {p}) \cup {"sybil_n1"}
+    /\ peer_churn_rate' = MAX_CHURN_RATE + 1  \* Vượt ngưỡng an toàn
+    /\ avg_peer_tenure' = 0                   \* Sybil node có tuổi đời bằng 0
+    /\ peer_latency' \in 0..(MAX_PEER_LATENCY + 10)
+
+
+UpdateP2PHealthSensor == 
+    /\ (P2PNormalUpdate \/ P2PAdversaryAttack)
+    /\ anchor_peers' = anchor_peers
+    /\ blacklisted_peers' = blacklisted_peers
+    /\ UNCHANGED <<state, btcSensorVars, daSensorVars, safe_blocks>>
+
+\* Non-deterministic environment update that simulates the real network.
+UpdateSensors ==
+    /\ 
+        \/ UpdateBTCSensor
+        \/ UpdateDASensor
+        \/ UpdateP2PHealthSensor
+    
+    \* ZK re-anchoring proof validity
+    \* Proof becomes valid only once the Bitcoin anchor has caught up to the submission height (i.e., the OP_RETURN tx is confirmed).
     /\ reanchoring_proof_valid' =
            IF state = "RECOVERING"
               /\ h_btc_anchored' >= h_btc_submitted'
               /\ h_btc_submitted' > 0
            THEN TRUE
            ELSE FALSE
-
-    \* -- DAS failure flag (random external signal) --
-    /\ is_das_failed' \in BOOLEAN
-
-    \* -- P2P network: pick one of 4 adversarial/normal scenarios --
-    \* (Abstracted to avoid state space explosion from per-peer enumeration)
-    /\ \/ \* Scenario 1: Healthy — fully connected to all anchor peers
-           /\ active_peers'     = anchor_peers
-           /\ blacklisted_peers' = {}
-       \/ \* Scenario 2: Eclipse Attack — sybil nodes fill connection slots
-           /\ active_peers'     = {"sybil_n1", "sybil_n2", "sybil_n3"}
-           /\ blacklisted_peers' = {"sybil_n1"}  \* Detection begins
-       \/ \* Scenario 3: Network partition — complete loss of connectivity
-           /\ active_peers'     = {}
-           /\ blacklisted_peers' = blacklisted_peers
-       \/ \* Scenario 4: Stable — no change
-           /\ UNCHANGED <<active_peers, blacklisted_peers>>
-
-    /\ UNCHANGED anchor_peers          \* Anchor peers are statically configured IPs
     /\ UNCHANGED <<state, safe_blocks>>
     /\ UNCHANGED <<censorVars>>
+
 
 (* ======================== FSM RULE ENGINE ================================= *)
 \* Pure function: given the current sensor readings, compute the next FSM state.
@@ -191,6 +225,16 @@ ExecuteFSMTransition(target_state) ==
                 THEN safe_blocks + 1  \* Increment hysteresis counter each RECOVERING block
                 ELSE 0
 
+(* ======================== THE NEXT-STATE ACTION (FOR UNIT TEST) ============ *)
+FSM_Next == 
+    \/ /\ UpdateSensors
+    \/ /\ state' = CalculateNextFSMState 
+       /\ state' /= state
+       /\ ExecuteFSMTransition(state')
+       /\ UNCHANGED <<envVars>> 
+
+
+FSM_Spec == FSM_Init /\ [][FSM_Next]_fsmVar
 
 
 (* ======================== SAFETY PROPERTIES ============================== *)

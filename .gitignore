@@ -57,5 +57,11 @@ data/
 
 
 # File backup
+*.back
 *.backup
 *.bak
+*.bakup
+
+
+# Currently unnecessary file
+docs/spec/core/EngramTypes.tla
