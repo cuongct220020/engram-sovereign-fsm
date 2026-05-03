@@ -90,7 +90,7 @@ p2pSensorVars ==
 VARIABLES 
     h_engram_current,        \* Latest Engram chain block height
     h_engram_verified,       \* Last DA-verified Engram block height
-    is_das_failed,           \* DAS failure flag from Blobstream
+    is_das_failed            \* DAS failure flag from Blobstream
 
 daSensorVars == <<h_engram_current, h_engram_verified, is_das_failed>>
 
@@ -98,7 +98,7 @@ daSensorVars == <<h_engram_current, h_engram_verified, is_das_failed>>
 VARIABLES
     h_btc_current,           \* Latest observed Bitcoin block height
     h_btc_submitted,         \* Height at which the ZK re-anchoring proof was submitted
-    h_btc_anchored,          \* Last confirmed Engram checkpoint height on Bitcoin
+    h_btc_anchored           \* Last confirmed Engram checkpoint height on Bitcoin
 
 btcSensorVars == <<h_btc_current, h_btc_submitted, h_btc_anchored>>
 
@@ -108,7 +108,7 @@ btcSensorVars == <<h_btc_current, h_btc_submitted, h_btc_anchored>>
 VARIABLES
     state,                   \* FSM state: "ANCHORED"|"SUSPICIOUS"|"SOVEREIGN"|"RECOVERING"
     safe_blocks,             \* Consecutive healthy blocks counted during RECOVERING
-    reanchoring_proof_valid, \* Boolean: ZK re-anchoring proof confirmed on-chain
+    reanchoring_proof_valid  \* Boolean: ZK re-anchoring proof confirmed on-chain
 
 \* Top-level FSM tuple consumed by EngramTendermint actions
 fsmVars ==

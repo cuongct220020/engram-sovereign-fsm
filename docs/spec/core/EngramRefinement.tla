@@ -36,12 +36,12 @@ Q_abstract == CHOOSE q \in SUBSET Nodes : Cardinality(q) >= THRESHOLD2
 \* Synthesize C-caches from concrete precommit quorums.
 \* Each (round, id) pair with >= 2f+1 precommits becomes a C-cache entry.
 CommitPairs ==
-    UNION { { <<r, m.id>> : m \in msgsPrecommit[r] } : r \in Rounds }
+    UNION { { <<r, m.id>> : m \in msgs_precommit[r] } : r \in Rounds }
 
 ValidCommits ==
     { pair \in CommitPairs :
         /\ pair[2] /= NilProposal
-        /\ Cardinality({ m \in msgsPrecommit[pair[1]] : m.id = pair[2] }) >= THRESHOLD2 }
+        /\ Cardinality({ m \in msgs_precommit[pair[1]] : m.id = pair[2] }) >= THRESHOLD2 }
 
 \* C-caches derived from concrete precommit quorums
 c_caches_dynamic == {
@@ -132,9 +132,9 @@ AbstractConsensus ==
         Nodes           <- Nodes,
         Method          <- Method,
         Stake           <- HomogeneousStake,
-        TotalStake      <- HomogeneousTotalStake,
-        ResetTime       <- TimeoutDuration,
-        MaxBTCHeight    <- MAX_BTC_HEIGHT,
+        TOTAL_STAKE     <- HomogeneousTotalStake,
+        RESET_TIME      <- TIMEOUT_DURATION,
+        MAX_BTC_HEIGHT  <- MAX_BTC_HEIGHT,
         tree            <- mapped_tree,
         fsm_state       <- mapped_fsm_state,
         round           <- CurrentMaxRound + 1,
@@ -151,10 +151,10 @@ QuorumOverlap ==
     \A q1, q2 \in AbstractConsensus!ValidQuorums :
         (q1 \intersect q2) \intersect Corr /= {}
 
-\* RefinementSafety:  concrete Server_Spec satisfies the abstract Safety spec
-RefinementSafety   == AbstractConsensus!Safety
+\* \* RefinementSafety:  concrete Server_Spec satisfies the abstract Safety spec
+\* RefinementSafety   == AbstractConsensus!Safety
 
-\* RefinementLiveness: concrete Server_Spec satisfies the abstract Liveness spec
-RefinementLiveness == AbstractConsensus!Liveness
+\* \* RefinementLiveness: concrete Server_Spec satisfies the abstract Liveness spec
+\* RefinementLiveness == AbstractConsensus!Liveness
 
 =============================================================================

@@ -17,7 +17,7 @@ CONSTANTS
     SOVEREIGN_THRESHOLD,    \* BTC gap threshold for Hard Failure (circuit-break)
     MIN_PEERS,              \* Minimum clean peers required to avoid isolation
     MIN_SUBNET_DIVERSITY,   \* Minimum distinct subnets required
-    MIN_ANCHOR_PEERS        \* Minimum active anchor/bootstrap peers required
+    MIN_ANCHOR_PEERS,       \* Minimum active anchor/bootstrap peers required
     MAX_CHURN_RATE,         \* Maximum allowed peer disconnects/reconnects per epoch
     MIN_AVG_TENURE,         \* Minimum average age of connections in the routing table
     MAX_PEER_LATENCY        \* Maximum allowable delay for heartbeat/block propagation
@@ -26,8 +26,8 @@ ASSUME
     /\ SUSPICIOUS_THRESHOLD \in Nat
     /\ SOVEREIGN_THRESHOLD \in Nat
     /\ DA_THRESHOLD \in Nat
-    /\ HYSTERESIS_WAIT   \in Nat
-    /\ MIN_PEERS         \in Nat
+    /\ HYSTERESIS_WAIT \in Nat
+    /\ MIN_PEERS \in Nat
     /\ MIN_SUBNET_DIVERSITY \in Nat
     /\ MIN_ANCHOR_PEERS  \in Nat
     /\ MAX_CHURN_RATE \in Nat
@@ -39,7 +39,7 @@ ASSUME
 MinVal(a, b) == IF a < b THEN a ELSE b
 
 
-(* ======================== P2P HEALTH SENSOR =============================== *)
+(* ======================== P2P HEALTH SENSOR (Tri-interface Profiler) =============================== *)
 SubnetOf(p) == 
     CASE p = "anchor_n1"                             -> "subnet_A"
       [] p = "anchor_n2"                             -> "subnet_B"
@@ -73,7 +73,7 @@ IsP2PQualityHealthy ==
 da_gap == h_engram_current - h_engram_verified
 
 \* DA layer is publishing proofs within the allowed gap
-IsDAHealthy == (da_gap < T_DA) /\ ~is_das_failed
+IsDAHealthy == (da_gap < DA_THRESHOLD) /\ ~is_das_failed
 
 
 (* ======================== BTC FINALITY GAP SENSOR ========================= *)
@@ -167,12 +167,18 @@ P2PNormalUpdate ==
 
 
 P2PAdversaryAttack ==
-    /\ \E p \in active_peers : 
-        /\ p \notin ActiveAnchors  \* Abstraction: Test-before-evict bảo vệ Anchor nodes
-        /\ active_peers' = (active_peers \ {p}) \cup {"sybil_n1"}
-    /\ peer_churn_rate' = MAX_CHURN_RATE + 1  \* Vượt ngưỡng an toàn
-    /\ avg_peer_tenure' = 0                   \* Sybil node có tuổi đời bằng 0
-    /\ peer_latency' \in 0..(MAX_PEER_LATENCY + 10)
+    \* ADVERSARY EXPLOITS THE "WEAKEST LINK" (DEFENSE-IN-DEPTH TEST)
+    \* The adversary non-deterministically chooses to eclipse 1 of the 3 external/internal network interfaces.
+    /\ \E target_network \in {"ENGRAM_P2P", "BTC_SPV", "CELESTIA_DA"} : 
+        /\ \E p \in active_peers : 
+            \* Abstraction: Regardless of the targeted interface, the "Test-before-evict" mechanism strictly protects Anchor peers.
+            /\ p \notin ActiveAnchors  
+            /\ active_peers' = (active_peers \ {p}) \cup {"sybil_n1"}
+            
+    \* Aggregated consequences reflected on the Holistic Monitor (Cross-interface P2P Health Sensor)
+    /\ peer_churn_rate' = MAX_CHURN_RATE + 1 \* Triggers network churn alarm (Dynamic Replacement / Handover)
+    /\ avg_peer_tenure' = 0 \* Triggers Sybil alarm (Adversary nodes have 0 tenure)
+    /\ peer_latency' \in 0..(MAX_PEER_LATENCY + 10) \* Simulates latency spikes caused by Relay Nodes or BGP Hijacking
 
 
 UpdateP2PHealthSensor == 
@@ -234,7 +240,7 @@ FSM_Next ==
        /\ UNCHANGED <<envVars>> 
 
 
-FSM_Spec == FSM_Init /\ [][FSM_Next]_fsmVar
+FSM_Spec == FSM_Init /\ [][FSM_Next]_fsmVars
 
 
 (* ======================== SAFETY PROPERTIES ============================== *)

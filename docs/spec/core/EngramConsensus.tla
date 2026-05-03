@@ -3,12 +3,12 @@ EXTENDS Naturals, FiniteSets
 
 (********************* INTERFACE & CONSTANTS ************************)
 CONSTANTS 
-    Nodes, 
-    ResetTime, 
-    Method, 
-    Stake, 
-    TotalStake,
-    MaxBTCHeight
+    Nodes,
+    Method,
+    Stake,
+    RESET_TIME,
+    TOTAL_STAKE,
+    MAX_BTC_HEIGHT
 
 (********************* CONSENSUS LAYER VARIABLES ***********)
 VARIABLES 
@@ -30,7 +30,7 @@ SumStakeOp(Q) == IF Q = {} THEN 0 ELSE LET n == CHOOSE x \in Q : TRUE IN Stake[n
 SumStake[Q \in SUBSET Nodes] == SumStakeOp(Q)
 
 \* Precompute the set of valid Quorums once
-ValidQuorums == {q \in SUBSET Nodes : SumStake[q] * 3 > TotalStake * 2}
+ValidQuorums == {q \in SUBSET Nodes : SumStake[q] * 3 > TOTAL_STAKE * 2}
 
 IsSQuorum(Q) == Q \in ValidQuorums
 
@@ -39,7 +39,7 @@ Init ==
     /\ tree = {} 
     /\ local_times = [n \in Nodes |-> 0] 
     /\ round = 1        
-    /\ rem_time = ResetTime
+    /\ rem_time = RESET_TIME
     /\ fsm_state = "ANCHORED"
     /\ h_btc_current = 2
     /\ h_btc_anchored = 2
@@ -56,13 +56,13 @@ Elapse ==
 TimeoutStartNext == 
     /\ rem_time = 0 
     /\ round' = round + 1 
-    /\ rem_time' = ResetTime 
+    /\ rem_time' = RESET_TIME 
     /\ UNCHANGED <<tree, local_times, fsm_state, h_btc_current, h_btc_anchored>>
 
 EarlyStartNext == 
     /\ \E c \in tree : c.type = "C" /\ c.c_round = round 
     /\ round' = round + 1 
-    /\ rem_time' = ResetTime 
+    /\ rem_time' = RESET_TIME 
     /\ UNCHANGED <<tree, local_times, fsm_state, h_btc_current, h_btc_anchored>>
 
 
@@ -82,7 +82,7 @@ IsKDeep(c, k) ==
 \* Simplify: The branch with the largest total stake is based on the number of voters.
 IsMaxStakeBranch(c) == 
     \/ c.c_round = 0  \* Exceptions are always valid for Genesis blocks
-    \/ SumStake[c.voters] >= TotalStake \div 2
+    \/ SumStake[c.voters] >= TOTAL_STAKE \div 2
 
 canElect(tr, c, Q, state_fsm) == 
     /\ c.type = "C" 

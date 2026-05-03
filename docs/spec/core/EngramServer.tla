@@ -19,7 +19,7 @@ EXTENDS Naturals, FiniteSets, EngramFSM, EngramTendermint
 CONSTANTS
     Nodes,      \* Set of all nodes in the abstract consensus layer
     Method,     \* Set of valid transaction methods (e.g. {"TX_NORMAL", "TX_WITHDRAWAL"})
-    ResetTime   \* Pacemaker reset time (passed through to EngramConsensus)
+    RESET_TIME  \* Pacemaker reset time (passed through to EngramConsensus)
 
 
 (* ======================== HELPERS ========================================= *)
@@ -27,9 +27,9 @@ CONSTANTS
 \* Used as a guard to stop issuing new proposals after a block is closed.
 GlobalDecisionExists ==
     \E r \in Rounds :
-        \E m \in msgsPrecommit[r] :
+        \E m \in msgs_precommit[r] :
             /\ m.id /= NilProposal
-            /\ Cardinality({ msg \in msgsPrecommit[r] : msg.id = m.id }) >= THRESHOLD2
+            /\ Cardinality({ msg \in msgs_precommit[r] : msg.id = m.id }) >= THRESHOLD2
 
 
 (* ======================== SERVER HOOKS (INTEGRATION LAYER) ================ *)
@@ -42,7 +42,7 @@ Server_InsertProposal(p) ==
     /\ ~GlobalDecisionExists
     /\ p = Proposer[round[p]]
     /\ step[p] = "PROPOSE"
-    /\ \A m \in msgsPropose[round[p]] : m.src /= p
+    /\ \A m \in msgs_propose[round[p]] : m.src /= p
     /\ \E v \in ValidValues :
            LET
                target_state == CalculateNextFSMState
@@ -61,8 +61,8 @@ Server_InsertProposal(p) ==
            IN
            \E proof_found \in proof_search_space :
                LET prop ==
-                       IF validValue[p] /= NilProposal
-                       THEN validValue[p]
+                       IF valid_value[p] /= NilProposal
+                       THEN valid_value[p]
                        ELSE Proposal(v, local_clock[p], round[p], target_state,
                                      receipt, h_btc_anchored, proof_found)
                IN
@@ -79,8 +79,8 @@ Server_InsertProposal(p) ==
                   IN qcs' = qcs \cup {NewEQC}
     /\ UNCHANGED <<tcs, fsmVars, censorVars>>
     /\ UNCHANGED <<coreVars, temporalVars>>
-    /\ UNCHANGED <<msgsPrevote, msgsPrecommit, msgsTimeout,
-                   evidence, receivedTimelyProposal, inspectedProposal>>
+    /\ UNCHANGED <<msgs_prevote, msgs_precommit, msgs_timeout,
+                   evidence, received_timely_proposal, inspected_proposal>>
     /\ action' = "Server_InsertProposal"
 
 
@@ -89,10 +89,10 @@ Server_ProposerVotes(p) ==
     /\ \/ UponProposalInPropose(p)
        \/ UponProposalInProposeAndPrevote(p)
     /\ IF p = Proposer[round[p]]
-          /\ \E m \in msgsPropose[round[p]] : m.src = p
+          /\ \E m \in msgs_propose[round[p]] : m.src = p
        THEN
            LET
-               prop  == (CHOOSE m \in msgsPropose[round[p]] : m.src = p).proposal
+               prop  == (CHOOSE m \in msgs_propose[round[p]] : m.src = p).proposal
                NewMQC == [
                    type         |-> "M_QC",
                    round        |-> round[p],
@@ -120,7 +120,7 @@ Server_UponProposalInPrecommitNoDecision(p) ==
     \* Step 2: Extract the just-decided proposal (the majority's agreed truth)
     /\ LET
            r    == round[p]
-           msg  == CHOOSE m \in msgsPropose[r] :
+           msg  == CHOOSE m \in msgs_propose[r] :
                        m.src = Proposer[r] /\ m.type = "PROPOSAL"
            prop == msg.proposal
        IN
@@ -160,7 +160,7 @@ Server_UponProposalInPrecommitNoDecision(p) ==
 \* Hook 4: 2f+1 timeout votes -> emit T_QC (maps to Abstract Timeout) + advance round.
 Server_UponTimeoutCert(p) ==
     \* Check timeout quorum
-    /\ \E MyEvidence \in SUBSET msgsTimeout[round[p]] :
+    /\ \E MyEvidence \in SUBSET msgs_timeout[round[p]] :
            LET Timers == { m.src : m \in MyEvidence } IN
            Cardinality(Timers) >= THRESHOLD2
 
@@ -178,10 +178,10 @@ Server_UponTimeoutCert(p) ==
     /\ UNCHANGED <<qcs, fsmVars>>
     /\ UNCHANGED <<forced_tx_queue>>
     /\ UNCHANGED <<local_clock, real_time>>
-    /\ UNCHANGED <<endConsensus, proposalTime, proposalReceivedTime>>
-    /\ UNCHANGED <<decision, lockedValue, lockedRound, validValue, validRound>>
-    /\ UNCHANGED <<msgsPropose, msgsPrevote, msgsPrecommit, msgsTimeout,
-                   evidence, receivedTimelyProposal, inspectedProposal>>
+    /\ UNCHANGED <<end_consensus, proposal_time, proposal_received_time>>
+    /\ UNCHANGED <<decision, locked_value, locked_round, valid_value, valid_round>>
+    /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout,
+                   evidence, received_timely_proposal, inspected_proposal>>
     /\ action' = "Server_UponTimeoutCert"
 
 
@@ -286,7 +286,7 @@ ServerFSMLiveness ==
 ForcedInclusionLiveness ==
     \A tx \in ValidValues :
         ([]<>(\E r \in Rounds, p \in Corr :
-                  \E m \in msgsPropose[r] : m.src = p /\ m.proposal.value = tx))
+                  \E m \in msgs_propose[r] : m.src = p /\ m.proposal.value = tx))
         => <>(\E p \in Corr :
                   decision[p] /= NilDecision /\ decision[p].prop.value = tx)
 
