@@ -362,48 +362,59 @@ All transitions require greater than 2/3 quorum agreement through the consensus 
 
 #### Transition Definitions
 
-**From ANCHORED:**
+* **From ANCHORED:**
 
-$$
-\text{AnchoredToSuspicious} \triangleq state = \text{ANCHORED} \land \text{IsWarningCondition} \land \lnot\text{IsCriticalCondition}
-$$
+  ```tlaplus
+  AnchoredToSuspicious == 
+      /\ state = ANCHORED 
+      /\ IsWarningCondition 
+      /\ ~IsCriticalCondition
 
-$$
-\text{AnchoredToSovereign} \triangleq state = \text{ANCHORED} \land \text{IsCriticalCondition}
-$$
+  AnchoredToSovereign == 
+      /\ state = ANCHORED 
+      /\ IsCriticalCondition
+  ```
 
-**From SUSPICIOUS:**
+* **From SUSPICIOUS:**
 
-$$
-\text{SuspiciousToAnchored} \triangleq state = \text{SUSPICIOUS} \land \text{IsHealthyCondition}
-$$
+  ```tlaplus
+  SuspiciousToAnchored == 
+      /\ state = SUSPICIOUS 
+      /\ IsHealthyCondition
 
-$$
-\text{SuspiciousToSovereign} \triangleq state = \text{SUSPICIOUS} \land \text{IsCriticalCondition}
-$$
+  SuspiciousToSovereign == 
+      /\ state = SUSPICIOUS 
+      /\ IsCriticalCondition
+  ```
 
 Note that `suspicious_duration` is incremented each block the system remains in `SUSPICIOUS` and reset to zero upon any state change. This counter feeds into `IsCriticalCondition` via the $\tau_{\text{max}}$ clause.
 
-**From SOVEREIGN:**
+* **From SOVEREIGN:**
 
-$$
-\text{SovereignToRecovering} \triangleq state = \text{SOVEREIGN} \land \text{IsHealthyCondition}
-$$
+  ```tlaplus
+  SovereignToRecovering == 
+      /\ state = SOVEREIGN 
+      /\ IsHealthyCondition
+  ```
 
-**From RECOVERING:**
+* **From RECOVERING:**
 
-$$
-\text{RecoveringProgress} \triangleq state = \text{RECOVERING} \land \text{IsHealthyCondition} \land safe\_blocks < H_{\text{wait}}
-$$
+  ```tlaplus
+  RecoveringProgress == 
+      /\ state = RECOVERING 
+      /\ IsHealthyCondition 
+      /\ safe_blocks < HYSTERESIS_WAIT
 
-$$
-\text{RecoveringToAnchored} \triangleq state = \text{RECOVERING} \land \text{IsHealthyCondition} \land safe\_blocks = H_{\text{wait}} \land \pi_{\text{RA}} = \text{TRUE}
-$$
+  RecoveringToAnchored == 
+      /\ state = RECOVERING
+      /\ IsHealthyCondition 
+      /\ safe_blocks = HYSTERESIS_WAIT 
+      /\ PI_RA = TRUE
 
-$$
-\text{RecoveringToSovereign} \triangleq state = \text{RECOVERING} \land \text{IsCriticalCondition}
-$$
-
+  RecoveringToSovereign == 
+      /\ state = RECOVERING 
+      /\ IsCriticalCondition
+  ````
 
 #### Re-anchoring via Recursive ZK-Proof
 
