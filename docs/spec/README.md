@@ -424,7 +424,7 @@ The `safe_blocks` counter prevents state oscillation. On entry into RECOVERING, 
 
 The base consensus engine is CometBFT (Tendermint). The key extension is the **Proposal structure**, which carries additional fields required by the hybrid model:
 
-```
+```text
 Proposal := {
     value        : transaction batch (TX_NORMAL | TX_WITHDRAWAL),
     timestamp    : local clock at proposal time,
@@ -636,6 +636,15 @@ The `P2PAdversaryAttack` action in `EngramFSM.tla` has been verified to produce 
 **Lemma 8.6 (EOTS Accountability).** Any fork — a violation of `AgreementOnValue` — implies some node broadcast two conflicting messages in the same round. The `DoubleSigningEvidence` predicate detects this across all message phases, enabling EOTS-based BTC slashing without smart contract execution.
 
 ```tlaplus
+DoubleSigningEvidence ==
+    \E r \in Rounds, p \in AllProcs :
+        \/ \E m1, m2 \in msgs_prevote[r] :
+               /\ m1.src = p /\ m2.src = p /\ m1.id /= m2.id
+        \/ \E m1, m2 \in msgs_precommit[r] :
+               /\ m1.src = p /\ m2.src = p /\ m1.id /= m2.id
+        \/ \E m1, m2 \in msgs_propose[r] :
+               /\ m1.src = p /\ m2.src = p /\ m1.proposal /= m2.proposal
+
 Accountability ==
     (~AgreementOnValue) => DoubleSigningEvidence
 ```
@@ -648,42 +657,76 @@ Modular blockchains face critical liveness risks when peripheral layers fail. Th
 
 **Theorem 9.1 (Autonomous Liveness under Degradation).** *The protocol continually processes transactions under normal conditions and autonomously degrades, recovers, and re-anchors its security posture without permanent stalling, even during external modular layer failures.*
 
+## 9. Liveness Analysis and Autonomous Recovery
+
+Modular blockchains face critical liveness risks when peripheral layers fail. Through the refinement mapping in `EngramServer.tla`, the concrete implementation mechanically inherits the abstract liveness properties of the LiDO framework. The following theorem is verified across 1.1 million states.
+
+**Theorem 9.1 (Autonomous Liveness under Degradation).** *The protocol continually processes transactions under normal conditions and autonomously degrades, recovers, and re-anchors its security posture without permanent stalling, even during external modular layer failures.*
+
 ### 9.1 FSM Temporal Properties
 
 Theorem 9.1 is established by verifying the following temporal leads-to properties under weak fairness assumptions, using TLC's implied-temporal checking across 8 branches.
 
-**Property L1 (Standard Consensus Liveness).** Under normal partial synchrony — specifically, whenever the Global Stabilization Time condition is repeatedly reached — honest validators always eventually commit a new block. The condition `GST_Reached` in `EngramServer.tla` requires synchronized clocks, sufficient peers, and `state = ANCHORED`.
+**Property L1 (Standard Consensus Liveness).** Under repeated GST conditions, honest validators always eventually commit a new block.
 
-$$(\square\lozenge \text{GSTReached}) \leadsto \bigl(\exists\, p \in \text{Corr}: step[p] = \text{"DECIDED"}\bigr)$$
+```tlaplus
+EventualDecisionUnderGST ==
+    ([]<> GSTReached) ~> (\E p \in Corr : step[p] = "DECIDED")
+```
 
-Formally specified as `EventualDecisionUnderGST` in `EngramServer.tla`.
+where `GSTReached` requires synchronized clocks, sufficient peers, and `state = ANCHORED`.
 
-**Property L2 (Circuit Breaker Liveness).** When a critical condition is detected by the honest majority, the network must eventually reach the `SOVEREIGN` state. This is guaranteed by the improved $f+1$ pacemaker (`UponfPlusOneTimeoutsAny`): if $f+1$ honest nodes have timed out and advanced to a higher round, all lagging nodes fast-forward accordingly. Combined with weak fairness on `AnchoredToSovereign` and `SuspiciousToSovereign`, the circuit breaker is guaranteed to eventually activate.
+**Property L2 (Circuit Breaker Liveness).** When a critical condition is detected, the network must eventually reach `SOVEREIGN`. The improved $f+1$ pacemaker (`UponfPlusOneTimeoutsAny`) guarantees that lagging nodes fast-forward once $f+1$ honest nodes have timed out.
 
-$$\text{IsCriticalCondition} \leadsto \bigl(state = \text{SOVEREIGN} \lor \lnot\text{IsCriticalCondition}\bigr)$$
+```tlaplus
+CircuitBreakerLiveness ==
+    IsCriticalCondition ~> (state = "SOVEREIGN" \/ ~IsCriticalCondition)
+```
 
-Formally specified as `CircuitBreakerLiveness` in `EngramFSM.tla`, part of `ServerFSMLiveness`.
+**Property L3 (Autonomous Recovery Initiation).** Once in `SOVEREIGN` with healthy peripheral layers, the network must eventually initiate recovery. `IsHealthyCondition` requiring `IsP2PQualityHealthy` guarantees a quorum of honest nodes is connected to agree on `SovereignToRecovering`.
 
-**Property L3 (Autonomous Recovery Initiation).** When the network is operating in `SOVEREIGN` state and peripheral layers have fully recovered, the system must eventually initiate the recovery sequence. This holds because `IsHealthyCondition` requires $P \geq P_{\min}$ active peers, guaranteeing that a quorum of honest nodes is connected and able to agree on `SovereignToRecovering`.
+```tlaplus
+RecoveryAttemptLiveness ==
+    (state = "SOVEREIGN" /\ IsHealthyCondition)
+    ~> (state = "RECOVERING" \/ ~IsHealthyCondition)
+```
 
-$$\bigl(state = \text{SOVEREIGN} \land \text{IsHealthyCondition}\bigr) \leadsto \bigl(state = \text{RECOVERING} \lor \lnot\text{IsHealthyCondition}\bigr)$$
+**Property L4 (Complete Re-anchoring).** Once a valid ZK-Proof is available and conditions remain healthy, the system must eventually return to `ANCHORED`. Under these conditions `RecoveringToAnchored` is the only enabled FSM transition; weak fairness guarantees it fires.
 
-Formally specified as `RecoveryAttemptLiveness` in `EngramFSM.tla`, part of `ServerFSMLiveness`.
+```tlaplus
+CompleteRecoveryLiveness ==
+    (state = "RECOVERING" /\ reanchoring_proof_valid /\ IsHealthyCondition)
+    ~> (state = "ANCHORED" \/ ~IsHealthyCondition \/ ~reanchoring_proof_valid)
+```
 
-**Property L4 (Complete Re-anchoring).** Once a valid ZK-Proof is available and network conditions remain healthy throughout the hysteresis wait, the system must eventually return to `ANCHORED`. Under these conditions, `RecoveringToAnchored` is the only enabled FSM transition, and weak fairness guarantees it will eventually fire.
+**Property L5 (ZK-Proof Generation Liveness).** During recovery under healthy conditions, a valid re-anchoring proof must eventually be produced.
 
-$$\bigl(state = \text{RECOVERING} \land \pi_{\text{RA}} = \text{TRUE} \land \text{IsHealthyCondition}\bigr) \leadsto \bigl(state = \text{ANCHORED} \lor \lnot\text{IsHealthyCondition} \lor \pi_{\text{RA}} \neq \text{TRUE}\bigr)$$
+```tlaplus
+ZKProofGenerationLiveness == 
+    (state = "RECOVERING" /\ IsHealthyCondition) ~> (reanchoring_proof_valid = TRUE)
+```
 
-Formally specified as `CompleteRecoveryLiveness` in `EngramFSM.tla`, part of `ServerFSMLiveness`.
+**Property L6 (Persistent Eclipse Resolution).** Persistent P2P anomalies must eventually resolve into either a secured or fully recovered state, preventing indefinite operation under degraded connectivity.
+
+```tlaplus
+PersistentEclipseResolutionLiveness == 
+    ([]<> ~IsP2PQualityHealthy) ~> (state \in {"SOVEREIGN", "ANCHORED"})
+```
 
 ### 9.2 Transaction-Level Liveness
 
-**Property L5 (Active Censorship Resistance).** If a Byzantine leader systematically ignores a valid transaction in the `forced_tx_queue` for `MaxIgnoreRounds` consecutive rounds, the `IsCensoring` predicate triggers: honest validators broadcast a TIMEOUT instead of a PREVOTE, forcing a round change and eventually rotating to an honest leader who will include the transaction.
+**Property L7 (Active Censorship Resistance).** If a Byzantine leader ignores a valid transaction in `forced_tx_queue` for `MAX_IGNORE_ROUNDS` consecutive rounds, `IsCensoring` triggers a TIMEOUT broadcast, forcing a round change and eventually rotating to an honest leader.
 
-$$\forall tx \in \text{ValidValues}: \Bigl(\square\lozenge \bigl(tx \in \text{msgsPropose}\bigr)\Bigr) \implies \lozenge\bigl(\exists\, p \in \text{Corr}: decision[p].value = tx\bigr)$$
+```tlaplus
+ForcedInclusionLiveness ==
+    \A tx \in ValidValues :
+        ([]<>(\E r \in Rounds, p \in Corr :
+                  \E m \in msgs_propose[r] : m.src = p /\ m.proposal.value = tx))
+        => <>(\E p \in Corr :
+                  decision[p] /= NilDecision /\ decision[p].prop.value = tx)
+```
 
 Formally specified as `ForcedInclusionLiveness` in `EngramServer.tla`.
-
 
 ## 10. Verification Results
 ### 10.1 Proof Strategy
