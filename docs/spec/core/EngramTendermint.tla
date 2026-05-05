@@ -245,10 +245,25 @@ ContainsWithdrawal(propVal) == propVal = "TX_WITHDRAWAL"
 
 \* Black-box verification: O(1) time complexity simulation for ZK-Proofs
 \* @type: (PROPOSAL) => Bool;
-VerifyZkProof(prop) == 
-    /\ prop.zk_proof_ref = TRUE                                     \* Leader claims proof exists
-    /\ prop.da_receipt.attestation = TRUE                           \* DA layer confirms data is available
-    /\ prop.da_receipt.published_block_height > h_engram_verified   \* Check if the proof corresponds to the recovery target
+VerifyZkProof(zk_proof, da_receipt) == 
+    /\ zk_proof = TRUE                                  \* Leader claims proof exists
+    /\ da_receipt.attestation = TRUE                            \* DA layer confirms data is available
+    /\ da_receipt.published_block_height > h_engram_verified    \* Check if the proof corresponds to the recovery target
+
+
+\* Abstracts a cryptographic hash as an identity mapping that returns 
+\* the Canonical Hash for a given block height.
+\* @type: (Int) => Bool;
+ExpectedBlockHash(height) == <<"BTC_BLOCK", height>>
+
+\* Simulates an SPV Light Client validating a BTC Receipt.
+\* If an eclipsed Proposer submits a forged branch (e.g., <<"BTC_FORK", height>>), the SPV client will reject it.
+\* @type: (BTC_Re)
+VerifySPVProof(receipt) ==
+    /\ receipt.checkpoint_block_height <= h_btc_current
+    /\ receipt.checkpoint_block_height >= h_btc_anchored
+    \* The receipt's hash must stricty match the Canonical Chain's hash
+    /\ receipt.checkpoint_block_hash = ExpectedBlockHash(receipt.checkpoint_block_height)
 
 
 (********************* CORE PROPOSAL VALIDITY (SEMANTIC FIREWALL) ******************************)
@@ -269,14 +284,9 @@ IsValidProposal(prop) ==
             /\ prop.da_receipt.published_block_height <= h_engram_current
             /\ prop.da_receipt.published_block_height >= (h_engram_current - DA_THRESHOLD - da_tol)
 
-        
-        \* Settlement Monotonicity Check: BTC anchor height cannot go backwards
-        /\ prop.btc_receipt.checkpoint_block_height >= h_btc_anchored
+        \* Settlement Monotonicity & BTC Light Client Hash Check
         /\ prop.btc_receipt.checkpoint_block_height >= (h_btc_current - btc_tol)
-        /\ prop.btc_receipt.checkpoint_block_height <= h_btc_current
-
-        \* Verify hash code against Bitcoin Reorg/Eclipse
-        \* /\ prop.btc_receipt.blockHash = ExpectedBlockHash(prop.btc_receipt.blockHeight)
+        /\ VerifySPVProof(prop.btc_receipt)
 
         \* Economic Circuit Breaker: Halt all cross-chain withdrawals during partition
         /\ (prop.fsm_state = "SOVEREIGN") => ~ContainsWithdrawal(prop.value)
@@ -284,7 +294,7 @@ IsValidProposal(prop) ==
         \* RE-ANCHORING LOGIC: Mandatory ZK-Proof when hysteresis wait is met
         \* If not met, strict enforcement that no fake ZK-proof is attached.
         /\  IF prop.fsm_state = "RECOVERING" /\ safe_blocks = HYSTERESIS_WAIT 
-            THEN VerifyZkProof(prop)
+            THEN VerifyZkProof(prop.zk_proof_ref, prop.da_receipt)
             ELSE prop.zk_proof_ref = FALSE
 
 
@@ -297,17 +307,15 @@ IsCensoring(p, prop) ==
 
 
 (* ======================== RECORD CONSTRUCTORS ============================ *)
-\* @type: (VALUE, TIME, ROUND, STRING, DA_RECEIPT, Int, Bool) => PROPOSAL;
-Proposal(v, t, r, fsm_s, da_receipt, h_btc, has_proof) ==
+\* @type: (VALUE, TIME, ROUND, STRING, DA_RECEIPT, BTC_RECEIPT, Bool) => PROPOSAL;
+Proposal(v, t, r, fsm_s, da_receipt, btc_receipt, has_proof) ==
     [
         value        |-> v,
         timestamp    |-> t,
         round        |-> r,
         fsm_state    |-> fsm_s,
         da_receipt   |-> da_receipt,
-        \* TODO: refactor all things related to Proposal
-        btc_receipt  |-> [ checkpoint_block_height |-> h_btc,
-                            checkpoint_block_hash   |-> "hash" ],
+        btc_receipt  |-> btc_receipt,
         zk_proof_ref |-> has_proof
     ]
 
@@ -501,17 +509,17 @@ ReceiveProposal(p) ==
         /\ inspected_proposal[r, p] = NilTimestamp
         /\ msg \notin received_timely_proposal[p]
         /\ inspected_proposal' = [inspected_proposal EXCEPT ![r, p] = local_clock[p]]
-        /\ LET isTimely == IsTimely(local_clock[p], msg.proposal.timestamp) IN
-               \/ /\ isTimely
+        /\ LET is_timely == IsTimely(local_clock[p], msg.proposal.timestamp) IN
+               \/ /\ is_timely
                   /\ received_timely_proposal' =
                          [received_timely_proposal EXCEPT ![p] = @ \union {msg}]
-                  /\ LET isNilTimestamp == proposal_received_time[r] = NilTimestamp IN
-                         \/ /\ isNilTimestamp
+                  /\ LET is_nil_timestamp == proposal_received_time[r] = NilTimestamp IN
+                         \/ /\ is_nil_timestamp
                             /\ proposal_received_time' =
                                    [proposal_received_time EXCEPT ![r] = real_time]
-                         \/ /\ ~isNilTimestamp
+                         \/ /\ ~is_nil_timestamp
                             /\ UNCHANGED proposal_received_time
-               \/ /\ ~isTimely
+               \/ /\ ~is_timely
                   /\ UNCHANGED <<received_timely_proposal, proposal_received_time>>
         /\ UNCHANGED <<temporalVars, coreVars, fsmVars, censorVars>>
         /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout, evidence>>
@@ -576,10 +584,10 @@ UponProposalInProposeAndPrevote(p) ==
         /\ LET
                prop == msg.proposal
                vr   == msg.valid_round
-               PV   == { m \in msgs_prevote[vr] : m.id = Id(prop) }
+               pv   == { m \in msgs_prevote[vr] : m.id = Id(prop) }
            IN
-           /\ Cardinality(PV) >= THRESHOLD2
-           /\ evidence' = PV \union {msg} \union evidence
+           /\ Cardinality(pv) >= THRESHOLD2
+           /\ evidence' = pv \union {msg} \union evidence
            /\ LET mid ==
                   IF IsValidProposal(prop)
                      /\ (locked_round[p] <= vr \/ locked_value[p] = prop.value)
@@ -599,8 +607,8 @@ UponProposalInProposeAndPrevote(p) ==
 UponQuorumOfPrevotesAny(p) ==
     /\ step[p] = "PREVOTE"
     /\ \E MyEvidence \in SUBSET msgs_prevote[round[p]] :
-           LET Voters == { m.src : m \in MyEvidence } IN
-           /\ Cardinality(Voters) >= THRESHOLD2
+           LET voters == { m.src : m \in MyEvidence } IN
+           /\ Cardinality(voters) >= THRESHOLD2
            /\ evidence' = MyEvidence \union evidence
            /\ BroadcastPrecommit(p, round[p], NilProposal)
            /\ step' = [step EXCEPT ![p] = "PRECOMMIT"]
@@ -621,10 +629,10 @@ UponProposalInPrevoteOrCommitAndPrevote(p) ==
         /\ step[p] \in {"PREVOTE", "PRECOMMIT"}
         /\ LET
                prop == msg.proposal
-               PV   == { m \in msgs_prevote[r] : m.id = Id(prop) }
+               pv   == { m \in msgs_prevote[r] : m.id = Id(prop) }
            IN
-           /\ Cardinality(PV) >= THRESHOLD2
-           /\ evidence' = PV \union {msg} \union evidence
+           /\ Cardinality(pv) >= THRESHOLD2
+           /\ evidence' = pv \union {msg} \union evidence
            /\ IF step[p] = "PREVOTE"
               THEN
                   /\ locked_value'  = [locked_value  EXCEPT ![p] = prop.value]
@@ -647,8 +655,8 @@ UponProposalInPrevoteOrCommitAndPrevote(p) ==
 \* @type: (PROCESS) => Bool;
 UponQuorumOfPrecommitsAny(p) ==
     /\ \E MyEvidence \in SUBSET msgs_precommit[round[p]] :
-        /\  LET UniqueCommitters == { m.src : m \in msgs_precommit[round[p]] }
-            IN Cardinality(UniqueCommitters) >= THRESHOLD2
+        /\  LET unique_committers == { m.src : m \in msgs_precommit[round[p]] }
+            IN Cardinality(unique_committers) >= THRESHOLD2
         /\ evidence' = msgs_precommit[round[p]] \union evidence
         /\ round[p] + 1 \in Rounds
         /\ StartRound(p, round[p] + 1)
@@ -674,10 +682,10 @@ UponProposalInPrecommitNoDecision(p) ==
         /\ inspected_proposal[r, p] /= NilTimestamp
         /\ LET
                prop == msg.proposal
-               PV   == { m \in msgs_precommit[r] : m.id = Id(prop) }
+               pv   == { m \in msgs_precommit[r] : m.id = Id(prop) }
            IN
-           /\ Cardinality(PV) >= THRESHOLD2
-           /\ evidence' = PV \union {msg} \union evidence
+           /\ Cardinality(pv) >= THRESHOLD2
+           /\ evidence' = pv \union {msg} \union evidence
            /\ decision' = [decision EXCEPT ![p] = Decision(prop, r)]
         /\ end_consensus' = [end_consensus EXCEPT ![p] = local_clock[p]]
         /\ step'         = [step EXCEPT ![p] = "DECIDED"]
@@ -707,9 +715,9 @@ OnTimeoutPropose(p) ==
 \* @type: (PROCESS) => Bool;
 OnQuorumOfNilPrevotes(p) ==
     /\ step[p] = "PREVOTE"
-    /\ LET PV == { m \in msgs_prevote[round[p]] : m.id = Id(NilProposal) } IN
-           /\ Cardinality(PV) >= THRESHOLD2
-           /\ evidence' = PV \union evidence
+    /\ LET pv == { m \in msgs_prevote[round[p]] : m.id = Id(NilProposal) } IN
+           /\ Cardinality(pv) >= THRESHOLD2
+           /\ evidence' = pv \union evidence
            /\ BroadcastPrecommit(p, round[p], Id(NilProposal))
            /\ step' = [step EXCEPT ![p] = "PRECOMMIT"]
            /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
@@ -724,11 +732,11 @@ OnQuorumOfNilPrevotes(p) ==
 OnRoundCatchup(p) ==
     \E r \in {rr \in Rounds : rr > round[p]} :
         LET 
-            RoundMsgs == msgs_propose[r] \union msgs_prevote[r] \union msgs_precommit[r]
-            Faster    == { m.src : m \in RoundMsgs }
+            round_msgs == msgs_propose[r] \union msgs_prevote[r] \union msgs_precommit[r]
+            faster    == { m.src : m \in round_msgs }
         IN  
-            /\ Cardinality(Faster) >= THRESHOLD1
-            /\ evidence' = RoundMsgs \union evidence
+            /\ Cardinality(faster) >= THRESHOLD1
+            /\ evidence' = round_msgs \union evidence
             /\ StartRound(p, r)
             /\ UNCHANGED <<temporalVars, fsmVars>>
             /\ UNCHANGED <<end_consensus, proposal_time, proposal_received_time>>
@@ -744,9 +752,9 @@ OnRoundCatchup(p) ==
 UponfPlusOneTimeoutsAny(p) ==
     \E r \in {rr \in Rounds : rr > round[p]} :
         LET 
-            Timers == { m.src : m \in msgs_timeout[r] }
+            timers == { m.src : m \in msgs_timeout[r] }
         IN 
-            /\ Cardinality(Timers) >= THRESHOLD1
+            /\ Cardinality(timers) >= THRESHOLD1
             /\ evidence' = msgs_timeout[r] \union evidence
             /\ StartRound(p, r)
             /\ UNCHANGED <<local_clock, real_time>>
@@ -813,24 +821,36 @@ MessageProcessing(p) ==
 (* ======================== ADVERSARY ACTIONS ================================ *)
 \* Byzantine Data-Withholding Attack: faulty leader broadcasts a structurally
 \* valid proposal but sets attestation = FALSE (data is not actually available).
-Byzantine_Data_Withholding ==
+ByzantineDataWithholding ==
     \E r \in Rounds :
         /\ Proposer[r] \in Faulty
         /\ msgs_propose[r] = {}
         /\ LET
-               bad_da   == [published_block_height |-> 999, attestation |-> FALSE]
-               bad_prop == Proposal("TX_NORMAL", MIN_TIMESTAMP, r, state,
-                                    bad_da, h_btc_current, FALSE)
-               bad_msg  == [type        |-> "PROPOSAL",
-                            src         |-> Proposer[r],
-                            round       |-> r,
-                            proposal    |-> bad_prop,
-                            valid_round |-> NilRound]
+            \* The attacker is hiding DA data.
+            bad_da == [
+                published_block_height |-> 999, 
+                attestation |-> FALSE
+            ]
+
+            \* The attacker created a BTC fork to attack Eclipse.
+            bad_btc  == [
+                checkpoint_block_height |-> h_btc_current,
+                checkpoint_block_hash   |-> <<"BTC_FORK", h_btc_current>>
+            ]
+
+            bad_prop == Proposal("TX_NORMAL", MIN_TIMESTAMP, r, state,
+                                bad_da, bad_btc, FALSE)
+            
+            bad_msg  == [type       |-> "PROPOSAL",
+                        src         |-> Proposer[r],
+                        round       |-> r,
+                        proposal    |-> bad_prop,
+                        valid_round |-> NilRound]
            IN
-           /\ msgs_propose' = [msgs_propose EXCEPT ![r] = msgs_propose[r] \union {bad_msg}]
-           /\ UNCHANGED <<coreVars, temporalVars, fsmVars, invariantVars, censorVars>>
-           /\ UNCHANGED <<msgs_prevote, msgs_precommit, msgs_timeout>>
-           /\ UNCHANGED <<evidence, action, received_timely_proposal, inspected_proposal>>
+            /\ msgs_propose' = [msgs_propose EXCEPT ![r] = msgs_propose[r] \union {bad_msg}]
+            /\ UNCHANGED <<coreVars, temporalVars, fsmVars, invariantVars, censorVars>>
+            /\ UNCHANGED <<msgs_prevote, msgs_precommit, msgs_timeout>>
+            /\ UNCHANGED <<evidence, action, received_timely_proposal, inspected_proposal>>
 
 
 \* Censorship Resistance: injects a new transaction into the forced inclusion queue
@@ -850,7 +870,7 @@ TendermintNext ==
     \/ AdvanceRealTime
     \/ /\ SynchronizedLocalClocks
        /\ \E p \in Corr : MessageProcessing(p)
-    \/ Byzantine_Data_Withholding
+    \/ ByzantineDataWithholding
     \/ SubmitToCelestiaDA
 
 

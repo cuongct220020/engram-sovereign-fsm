@@ -47,9 +47,14 @@ ServerInsertProposal(p) ==
            LET
                target_state == CalculateNextFSMState
 
-               receipt == [
+               da_receipt == [
                    published_block_height   |-> h_engram_verified,
                    attestation              |-> IsDAHealthy
+               ]
+
+               btc_receipt == [
+                    checkpoint_block_height |-> h_btc_anchored,
+                    checkpoint_block_hash   |-> ExpectedBlockHash(h_btc_anchored)  
                ]
 
                \* ZK proof search space: only open the TRUE branch once
@@ -64,19 +69,19 @@ ServerInsertProposal(p) ==
                        IF valid_value[p] /= NilProposal
                        THEN valid_value[p]
                        ELSE Proposal(v, local_clock[p], round[p], target_state,
-                                     receipt, h_btc_anchored, proof_found)
+                                     da_receipt, btc_receipt, proof_found)
                IN
                \* Inject the concrete proposal into Tendermint
                /\ InsertProposal(p, prop)
 
                \* Emit E_QC for the LiDO abstract pacemaker
-               /\ LET NewEQC == [
+               /\ LET new_EQC == [
                           type          |-> "E_QC",
                           round         |-> round[p],
                           caller        |-> p,
                           method        |-> "None",
                           btc_anchored  |-> h_btc_current ]
-                  IN qcs' = qcs \cup {NewEQC}
+                  IN qcs' = qcs \cup {new_EQC}
     /\ UNCHANGED <<tcs, fsmVars, censorVars>>
     /\ UNCHANGED <<coreVars, temporalVars>>
     /\ UNCHANGED <<msgs_prevote, msgs_precommit, msgs_timeout,
@@ -93,14 +98,14 @@ ServerProposerVotes(p) ==
        THEN
            LET
                prop  == (CHOOSE m \in msgs_propose[round[p]] : m.src = p).proposal
-               NewMQC == [
+               new_MQC == [
                    type         |-> "M_QC",
                    round        |-> round[p],
                    caller       |-> p,
                    method       |-> prop.value,
                    btc_anchored |-> h_btc_current ]
            IN
-           /\ qcs' = qcs \cup {NewMQC}
+           /\ qcs' = qcs \cup {new_MQC}
            /\ tcs' = tcs
        ELSE
            /\ qcs' = qcs
@@ -160,19 +165,19 @@ ServerUponProposalInPrecommitNoDecision(p) ==
 \* Hook 4: 2f+1 timeout votes -> emit T_QC (maps to Abstract Timeout) + advance round.
 ServerUponTimeoutCert(p) ==
     \* Check timeout quorum
-    /\  LET UniqueSenders == { m.src : m \in msgs_timeout[round[p]] }
-        IN Cardinality(UniqueSenders) >= THRESHOLD2
+    /\  LET unique_senders == { m.src : m \in msgs_timeout[round[p]] }
+        IN Cardinality(unique_senders) >= THRESHOLD2
 
     \* Advance to next round
     /\ StartRound(p, round[p] + 1)
 
     \* Emit T_QC for the LiDO abstract pacemaker
-    /\  LET NewTQC == [
+    /\  LET new_TQC == [
                type         |-> "T_QC",
                round        |-> round[p],
                caller       |-> p,
                btc_anchored |-> h_btc_current ]
-        IN tcs' = tcs \cup {NewTQC}
+        IN tcs' = tcs \cup {new_TQC}
 
     /\ UNCHANGED <<qcs, fsmVars>>
     /\ UNCHANGED <<forced_tx_queue>>
@@ -217,7 +222,7 @@ ServerAdvanceRealTime ==
     /\ UNCHANGED <<qcs, tcs, fsmVars>>
 
 ServerByzantineDataWithholding ==
-    /\ Byzantine_Data_Withholding
+    /\ ByzantineDataWithholding
     /\ UNCHANGED <<qcs, tcs, fsmVars>>
 
 ServerNext ==
