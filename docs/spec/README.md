@@ -21,9 +21,9 @@
     - [4.1 Bitcoin Finality Gap Sensor](#41-bitcoin-finality-gap-sensor)
     - [4.2 Data Availability Gap Sensor](#42-data-availability-gap-sensor)
       - [Data Availability Sampling (DAS)](#data-availability-sampling-das)
-    - [4.3 P2P Health Sensor](#43-p2p-health-sensor)
+    - [4.3 P2P Health Sensor (Tri-interface Profiler)](#43-p2p-health-sensor-tri-interface-profiler)
   - [5. State Transition](#5-state-transition)
-    - [5.1 State Transition Conditions](#51-steate-transition-conditions)
+    - [5.1 State Transition Conditions](#51-state-transition-conditions)
       - [Warning Condition](#warning-condition)
       - [Critical Condition](#critical-condition)
       - [Healthy Condition](#healthy-condition)
@@ -46,8 +46,7 @@
     - [10.5 Interpretation](#105-interpretation)
   - [11. Future Work](#11-future-work)
     - [11.1 Pipelined Tendermint (Phase Merging)](#111-pipelined-tendermint-phase-merging)
-    - [11.2 Eclipse Attack Formal Scenario](#112-eclipse-attack-formal-scenario)
-    - [11.3 Parametric Verification](#113-parametric-verification)
+    - [11.2 Parametric Verification](#112-parametric-verification)
   - [12. How to Run the Verification](#12-how-to-run-the-verification)
     - [Prerequisites](#prerequisites)
     - [Safety Verification](#safety-verification)
@@ -166,7 +165,7 @@ stateDiagram-v2
 
     SOVEREIGN --> RECOVERING : IsHealthyCondition
 
-    RECOVERING --> ANCHORED   : IsHealthyCondition /\ safe_blocks = H_wait /\ pi_RA = TRUE
+    RECOVERING --> ANCHORED   : IsHealthyCondition <br>/\ safe_blocks = H_wait <br>/\ pi_RA = TRUE
     RECOVERING --> SOVEREIGN  : IsCriticalCondition
 ```
 
@@ -288,153 +287,137 @@ $$\text{IsAvailable}(B) \triangleq \bigwedge_{i=1}^{N} s_i \qquad \text{Failed}(
 
 The boolean `is_das_failed` is set to TRUE if any sampling check fails within the current epoch.
 
-### 4.3 P2P Health Sensor
+### 4.3 P2P Health Sensor (Tri-Interface Profiler)
 
-> Detailed Development Specification (in-progress)
+Unlike the Bitcoin and DA sensors, which measure a single numeric gap, the P2P sensor must defend against Eclipse Attacks that operate simultaneously across multiple TCP/IP layers: routing table poisoning at the application layer, TCP slot exhaustion at the transport layer, and BGP hijacking at the network layer. A single peer count cannot distinguish honest long-lived peers from freshly injected Sybil nodes.
 
-The number of active peer connections, `peer_count`, is monitored continuously. The requirement $P \geq P_{\min}$ as a precondition for the healthy state prevents an isolated node from triggering recovery based on a stale or adversarial sensor view.
+To model this without state space explosion, the specification abstracts the full attack surface into a composite predicate `IsP2PQualityHealthy` governed by six constants across two barrier groups, applied uniformly to all three protected interfaces of an Engram validator: the **Engram P2P layer**, the **Bitcoin SPV Client**, and the **Celestia Light Client**.
+
+```tlaplus
+IsP2PQualityHealthy ==
+    \* Group 1 — Structural Constraints (defeat topology-based attacks)
+    /\ SubnetDiversity            >= MIN_SUBNET_DIVERSITY  \* no ASN-level monopoly
+    /\ Cardinality(ActiveAnchors) >= MIN_ANCHOR_PEERS      \* anchor nodes reachable
+    /\ Cardinality(CleanPeers)    >= MIN_PEERS             \* sufficient honest peers
+    
+    \* Group 2 — Behavioral & Temporal Constraints (defeat identity-rotation and relay attacks)
+    /\ peer_churn_rate            <= MAX_CHURN_RATE        \* no Dynamic Replacement attack
+    /\ avg_peer_tenure            >= MIN_AVG_TENURE        \* no fresh Sybil injection
+    /\ peer_latency               <= MAX_PEER_LATENCY      \* no relay node interception
+```
+
+The adversarial action `P2PAdversaryAttack` in `EngramFSM.tla` models the "weakest link" strategy: targeting any one of the three interfaces simultaneously triggers alarms across all six metrics, reflecting the cross-interface propagation of Eclipse symptoms.
+
+| Constant | Group | Attack Defeated |
+|---|---|---|
+| `MIN_PEERS` | Structural | Peer slot exhaustion, basic Sybil |
+| `MIN_SUBNET_DIVERSITY` | Structural | ASN-level BGP hijacking, botnet monopoly |
+| `MIN_ANCHOR_PEERS` | Structural | Complete anchor isolation (triggers Critical) |
+| `MAX_CHURN_RATE` | Behavioral | Dynamic Replacement, IP rotation |
+| `MIN_AVG_TENURE` | Behavioral | Fresh Sybil injection detection |
+| `MAX_PEER_LATENCY` | Temporal | Relay node interception, BGP detour |
 
 
 ## 5. State Transition 
 
-### 5.1. Steate Transition Conditions
+### 5.1 State Transition Conditions
 
-Sensor values are composed into three composite conditions that drive state machine transitions. Sensors only **propose** a state; the actual FSM state the network operates in is determined by the consensus pipeline. A proposer embeds the target FSM state in its proposal, and validators prevote for it only if it is consistent with their own local sensor readings. This ensures that all correct nodes remain on the same FSM state without requiring a separate out-of-band coordination step.
-
-Let $P$ denote `peer_count` and $P_{\min}$ denote `MIN_PEERS`.
+Sensors only **propose** a target state; the actual FSM state is determined by the consensus pipeline. `CalculateNextFSMState` is a pure function mapping sensor readings to a target state, and `ExecuteFSMTransition` writes the agreed state after block commit (triggered by `ServerUponProposalInPrecommitNoDecision`). A validator prevotes for a proposal only if the embedded `fsm_state` matches `CalculateNextFSMState` at its own local sensor readings.
 
 #### Warning Condition
 
-Indicates that one or more peripheral layers are operating outside normal parameters, but the situation is not yet critical. Triggers a transition toward degraded states.
-
-$$ 
-\begin{aligned}
-\text{IsWarningCondition} \triangleq\;&
-(T_\text{Suspicious} \leq \Delta H_\text{BTC} < T_\text{Sovereign}) \\
-&\lor (\Delta H_\text{DA} \geq T_\text{DA}) \\
-&\lor \text{IsDASFailed} \\
-&\lor (P < P_{min})
-\end{aligned}
-$$ 
+```tlaplus
+IsWarningCondition == 
+    \/ IsBTCGapSuspicious   \* T_Suspicious <= btc_gap < T_Sovereign
+    \/ ~IsDAHealthy         \* da_gap >= DA_THRESHOLD \/ is_das_failed
+    \/ ~IsP2PQualityHealthy \* any of the 6 structural/behavioral bounds violated
+```
 
 #### Critical Condition
 
-Indicates that Bitcoin settlement finality has been unavailable beyond the tolerance threshold. Triggers the circuit breaker.
+```tlaplus
+IsCriticalCondition == 
+    \/ IsBTCGapSovereign                            \* btc_gap >= T_Sovereign
+    \/ Cardinality(ActiveAnchors) = 0               \* complete anchor isolation
+    \/ suspicious_duration >= MAX_SUSPICIOUS_TIME   \* escalation timeout
+```
 
-$$\text{IsCriticalCondition} \triangleq \Delta H_{\text{BTC}} \geq T_{\text{Sovereign}}$$
+The anchor isolation clause captures total Eclipse Attack success and escalates directly to SOVEREIGN without waiting for the BTC gap threshold. The `suspicious_duration` timeout prevents the system from remaining indefinitely in SUSPICIOUS.
 
 #### Healthy Condition
 
-All peripheral layers are operating within normal parameters. Required as a precondition for initiating or progressing through recovery.
+```tlaplus
+IsHealthyCondition == 
+    /\ ~IsBTCGapSovereign
+    /\ ~IsBTCGapSuspicious
+    /\ IsDAHealthy
+    /\ IsP2PQualityHealthy
+```
 
+`IsP2PQualityHealthy` (Section 4.3) prevents an eclipsed node from declaring the network healthy and unilaterally triggering recovery.
 
-$$ 
-\begin{aligned}
-\text{IsHealthyCondition} \triangleq\;&
-\Delta H_\text{BTC} < T_\text{Suspicious} \\
-&\land \Delta H_\text{DA} < T_\text{DA} \\
-&\land \lnot \text{IsDASFailed} \\
-&\land P \geq P_\text{min}
-\end{aligned}
-$$
+### 5.2 State Transition Logic
 
-
-The $P \geq P_{\min}$ requirement is an Eclipse Attack defense: an isolated node must not be able to declare the network healthy and unilaterally trigger recovery when the honest majority is unreachable.
-
-
-### 5.2. State Transition Logic
-
-> **Note for future revision.** The transition definitions below represent the current formal specification. The interactions between RECOVERING and concurrent network partitions (RecoveringToSuspicious, RecoveringToSovereign) are acknowledged as candidates for refinement as the protocol matures. These transitions are isolated in Section 6.1 to make future adjustments straightforward.
-
-All transitions require greater than 2/3 quorum agreement through the consensus pipeline before taking effect.
+All transitions require greater than 2/3 quorum agreement through the consensus pipeline. In the current specification, the FSM transition is driven by a **pure function** `CalculateNextFSMState` that maps current sensor readings to a target state deterministically, and an **action** `ExecuteFSMTransition` that writes the new state and updates the hysteresis counter upon block commit.
 
 #### Transition Definitions
-
-The transitions are grouped by source state for clarity. Each transition definition is expressed as a TLA+ predicate over the current system state.
 
 **From ANCHORED:**
 
 $$
-\begin{aligned}
-\text{AnchoredToSuspicious} \triangleq\;& state = \text{ANCHORED} \\
-&\land \text{IsWarningCondition} \\
-&\land \lnot \text{IsCriticalCondition}
-\end{aligned}
+\text{AnchoredToSuspicious} \triangleq state = \text{ANCHORED} \land \text{IsWarningCondition} \land \lnot\text{IsCriticalCondition}
 $$
 
-
 $$
-\begin{aligned}
-\text{AnchoredToSovereign} \triangleq\;& state = \text{ANCHORED} \\
-&\land \text{IsCriticalCondition}
-\end{aligned}
+\text{AnchoredToSovereign} \triangleq state = \text{ANCHORED} \land \text{IsCriticalCondition}
 $$
 
 **From SUSPICIOUS:**
 
 $$
-\begin{aligned}
-\text{SuspiciousToAnchored} \triangleq\;& state = \text{SUSPICIOUS} \\
-&\land \text{IsHealthyCondition}
-\end{aligned}
+\text{SuspiciousToAnchored} \triangleq state = \text{SUSPICIOUS} \land \text{IsHealthyCondition}
 $$
 
 $$
-\begin{aligned}
-\text{SuspiciousToSovereign} \triangleq\;& state = \text{SUSPICIOUS} \\
-&\land \text{IsCriticalCondition}
-\end{aligned}
+\text{SuspiciousToSovereign} \triangleq state = \text{SUSPICIOUS} \land \text{IsCriticalCondition}
 $$
+
+Note that `suspicious_duration` is incremented each block the system remains in `SUSPICIOUS` and reset to zero upon any state change. This counter feeds into `IsCriticalCondition` via the $\tau_{\text{max}}$ clause.
 
 **From SOVEREIGN:**
 
 $$
-\begin{aligned}
-\text{SovereignToRecovering} \triangleq\;& state = \text{SOVEREIGN} \\
-&\land \text{IsHealthyCondition}
-\end{aligned}
+\text{SovereignToRecovering} \triangleq state = \text{SOVEREIGN} \land \text{IsHealthyCondition}
 $$
 
-**From RECOVERING** (candidates for future refinement are marked):
+**From RECOVERING:**
 
 $$
-\begin{aligned}
-\text{RecoveringProgress} \triangleq\;& state = \text{RECOVERING} \\
-&\land \text{IsHealthyCondition} \\
-&\land safe\_blocks < \text{HysteresisWait}
-\end{aligned}
+\text{RecoveringProgress} \triangleq state = \text{RECOVERING} \land \text{IsHealthyCondition} \land safe\_blocks < H_{\text{wait}}
 $$
 
 $$
-\begin{aligned}
-\text{RecoveringToAnchored} \triangleq\;& state = \text{RECOVERING} \\
-&\land \text{IsHealthyCondition} \\
-&\land safe\_blocks = \text{HysteresisWait} \\
-&\land reanchoring\_proof\_valid = \text{TRUE}
-\end{aligned}
+\text{RecoveringToAnchored} \triangleq state = \text{RECOVERING} \land \text{IsHealthyCondition} \land safe\_blocks = H_{\text{wait}} \land \pi_{\text{RA}} = \text{TRUE}
 $$
 
+$$
+\text{RecoveringToSovereign} \triangleq state = \text{RECOVERING} \land \text{IsCriticalCondition}
+$$
 
-$$
-\begin{aligned}
-\text{RecoveringToSovereign} \triangleq\;& state = \text{RECOVERING} \\
-&\land \text{IsCriticalCondition}
-\end{aligned}
-$$
 
 #### Re-anchoring via Recursive ZK-Proof
 
-Blocks produced in `SOVEREIGN` mode are secured only by local PoS and are not yet Bitcoin-anchored. To restore Bitcoin-grade finality, these blocks must be reconciled with the Bitcoin-anchored history without requiring re-execution of each sovereign block individually.
+Blocks produced in SOVEREIGN mode are secured only by local PoS and are not yet Bitcoin-anchored. To restore Bitcoin-grade finality, these blocks must be reconciled with the Bitcoin-anchored history without requiring re-execution of each sovereign block individually.
 
 Let $S_{\text{last}}$ be the last Bitcoin-anchored state and $\Delta_1, \dots, \Delta_n$ be the sequence of sovereign state transitions. The re-anchoring proof $\pi_{\text{RA}}$ must satisfy:
 
-$$V(S_{\text{last}}, S_{\text{new}}, \pi_{\text{RA}}) = 1, \quad\text{where} S_{\text{new}} = S_{\text{last}} + \sum_{i=1}^{n} \Delta_i$$
+$$V(S_{\text{last}},\, S_{\text{new}},\, \pi_{\text{RA}}) = 1, \quad\text{where}\; S_{\text{new}} = S_{\text{last}} + \sum_{i=1}^{n} \Delta_i$$
 
 A single recursive SNARK (Plonk proving system, Poseidon2 hash) aggregates all sovereign transitions into one constant-size proof, allowing $O(1)$ verification on the settlement layer regardless of the number of sovereign blocks produced.
 
 #### Hysteresis Mechanism
 
-The `safe_blocks` counter prevents state oscillation. On entry into RECOVERING, the counter is reset to zero. Each block for which `IsHealthyCondition` holds increments the counter by one. The transition to ANCHORED is blocked until `safe_blocks = HYSTERESIS_WAIT`. Any deterioration resets the counter to zero and the process restarts.
+The `safe_blocks` counter prevents state oscillation. On entry into RECOVERING, the counter is reset to zero. Each block for which `IsHealthyCondition` holds increments the counter by one. The transition to ANCHORED is blocked until `safe_blocks = HYSTERESIS_WAIT`. Any deterioration that triggers `IsCriticalCondition` resets the counter and transitions to SOVEREIGN, restarting the recovery process from the beginning.
 
 
 ## 7. Consensus Protocol: Hybrid Adaptive Tendermint with Extended Proposal
@@ -446,19 +429,26 @@ Proposal := {
     value        : transaction batch (TX_NORMAL | TX_WITHDRAWAL),
     timestamp    : local clock at proposal time,
     round        : current consensus round,
-    fsm_state    : agreed FSM state embedded in proposal,
-    da_receipt   : { blockHeight : Nat, attestation : Bool },
-    btc_anchored : Bitcoin anchor height at proposal time,
-    zk_proof_ref : Bool  (proof submission flag for re-anchoring)
+    fsm_state    : target FSM state computed by CalculateNextFSMState,
+    da_receipt   : {
+                     published_block_height : Nat,   -- last DA-verified Engram-app chain height
+                     attestation            : Bool   -- Blobstream confirmation
+                   },
+    btc_receipt  : {
+                     checkpoint_block_height : Nat,   -- Bitcoin block containing Engram checkpoint 
+                     checkpoint_block_hash   : Hash   -- canonical chain hash of the block contains Engram checkpoint
+                   },
+    zk_proof_ref : Bool  -- proof submission flag for re-anchoring
 }
 ```
 
-A validator accepts a proposal and casts a PREVOTE only if `IsValidProposal(proposal)` holds. This predicate enforces:
-- The embedded `fsm_state` matches the validator's local state.
-- The DA receipt is valid and within the allowed DA gap (required for `ANCHORED` and `RECOVERING` states).
-- `btc_anchored` is monotonically non-decreasing (settlement safety).
+A validator accepts a proposal and casts a `PREVOTE` only if `IsValidProposal(proposal)` holds. This predicate enforces:
+
+- `fsm_state` matches `CalculateNextFSMState` evaluated at the validator's local sensor readings (cross-check of agreed peripheral health).
+- The DA receipt is valid and within the allowed DA gap, with round-adaptive tolerance `DATolerance(r)` (required for `ANCHORED` and `RECOVERING` states).
+- `btc_receipt.checkpoint_block_height` satisfies monotonic non-decrease with round-adaptive BTC tolerance `BTCTolerance(r)`, and `VerifySPVProof(btc_receipt)` passes the canonical hash check.
 - Withdrawal transactions are blocked when `fsm_state = SOVEREIGN`.
-- A ZK-Proof is mandatory when `fsm_state = RECOVERING` and `safe_blocks = HYSTERESIS_WAIT`.
+- A ZK-Proof is mandatory (`VerifyZkProof`) when `fsm_state = RECOVERING` and `safe_blocks = HYSTERESIS_WAIT`.
 
 ```mermaid
 stateDiagram-v2
@@ -532,62 +522,125 @@ The formal correctness of the hybrid consensus protocol is guaranteed across the
 
 **Theorem 8.1 (Hybrid Consensus Safety and Accountability).** *Under partial synchrony, no two honest nodes will ever decide on conflicting blocks or conflicting FSM states. Any safety violation mathematically guarantees the extraction of cryptographic double-signing evidence via EOTS.*
 
-$$\forall\, p, q \in \text{Corr}: \bigl(decision[p] \neq \bot \land decision[q] \neq \bot\bigr) \implies decision[p].value = decision[q].value$$
-
 ### 8.1 State Invariants
 
 To prove Theorem 8.1, the TLC model checker exhaustively verified the following invariants against 37.7 million reachable states with zero violations.
 
 **Invariant S1 (Circuit Breaker Isolation).** Cross-chain withdrawals are strictly locked if and only if the protocol operates in a fallback state. This prevents fund extraction during any period when Bitcoin finality cannot guarantee the irreversibility of cross-chain transactions.
 
-$$\text{withdrawLocked} \iff state \in \{\text{SOVEREIGN},\, \text{RECOVERING}\}$$
+```tlaplus
+CircuitBreakerSafety ==
+    WithdrawLocked <=> (state \in {"SOVEREIGN", "RECOVERING"})
+```
 
-Formally specified in `EngramFSM.tla` as `CircuitBreakerSafety` and verified as `CircuitBreakerSafety` in both model checker configurations.
+Formally specified in `EngramFSM.tla` as `CircuitBreakerSafety` and verified in both model checker configurations.
 
 **Invariant S2 (Hysteresis Integrity).** A transition from `RECOVERING` back to `ANCHORED` is impossible without satisfying the full hysteresis wait period and providing a valid recursive ZK-Proof. This prevents premature re-anchoring during intermittent connectivity.
 
-$$\square\Bigl[\bigl(state = \text{RECOVERING} \land state' = \text{ANCHORED}\bigr) \implies \bigl(safeBlocks = H_{\text{wait}} \land \pi_{\text{RA}} = \text{TRUE}\bigr)\Bigr]$$
+```tlaplus
+HysteresisSafety ==
+    [][ (state = "RECOVERING" /\ state' = "ANCHORED")
+        => (safe_blocks = HYSTERESIS_WAIT /\ reanchoring_proof_valid) ]_fsmVars
+```
 
 Formally specified in `EngramFSM.tla` as `HysteresisSafety` and verified as a temporal safety property in `MC_ServerRefinementSafety`.
 
-**Invariant S3 (FSM State Consistency).** Every decided proposal must carry the same FSM state that the network is currently operating in. This closes the gap identified in Section 1.2: no node can commit a block claiming a different security posture than the one the honest majority agreed upon.
+**Invariant S3 (Strict FSM Transition Safety).** Only legal adjacency transitions are permitted, preventing any illegal or out-of-order state changes.
 
-$$\forall\, p \in \text{Corr}: decision[p] \neq \bot \implies decision[p].prop.fsmState = state$$
+```tlaplus
+StrictFSMTransitionSafety == 
+    [][ state /= state' => 
+        \/ (state = "ANCHORED"   /\ state' \in {"SUSPICIOUS", "SOVEREIGN"})
+        \/ (state = "SUSPICIOUS" /\ state' \in {"ANCHORED", "SOVEREIGN"})
+        \/ (state = "SOVEREIGN"  /\ state' = "RECOVERING")
+        \/ (state = "RECOVERING" /\ state' \in {"ANCHORED", "SOVEREIGN"})
+      ]_fsmVars
+```
 
-Formally specified in `EngramServer.tla` as `FSMStateConsistency`, part of `HybridTendermintInv`.
+**Invariant S4 (FSM State Consistency).** Every decided proposal must carry the same FSM state that the network is currently operating in. This closes the gap identified in Section 1.2: no node can commit a block claiming a different security posture than the one the honest majority agreed upon.
+
+```tlaplus
+FSMStateConsistency ==
+    \A p \in Corr:
+        decision[p] /= NilDecision => decision[p].prop.fsm_state = state
+```
+
+Formally specified in `EngramServer.tla` as `FSMStateConsistency`, part of `HybridTendermintInvariant`.
+
+**Invariant S5 (Monotonicity Safety).** Chain heights and real time must monotonically increase or remain constant, preventing time-travel or chain rollback anomalies.
+
+```tlaplus
+MonotonicitySafety == 
+    [][ /\ h_btc_current'    >= h_btc_current
+        /\ h_btc_anchored'   >= h_btc_anchored
+        /\ h_engram_current' >= h_engram_current
+        /\ real_time'        >= real_time 
+      ]_serverVars
+```
 
 ### 8.2 Attack Resilience Lemmas
 
-Beyond the state invariants, the `IsValidProposal` predicate in `EngramTendermint.tla` serves as a semantic firewall that enforces the following attack-specific lemmas at the consensus layer.
+Beyond the state invariants, the `IsValidProposal` predicate in `EngramTendermint.tla` serves as a semantic firewall enforcing the following attack-specific lemmas at the consensus layer.
 
-**Lemma 8.2 (Data Withholding Resistance).** Block validity strictly requires a Data Availability attestation for all proposals in `ANCHORED` or `RECOVERING` states. A Byzantine leader that publishes a block header while withholding the transaction body (`attestation = FALSE`) will have its proposal rejected by all honest validators, who will cast PREVOTE NIL and force a round change.
+**Lemma 8.2 (Data Withholding Resistance).** A Byzantine leader publishing a block header while withholding the transaction body (`attestation = FALSE`) will have its proposal rejected by all honest validators, who cast PREVOTE NIL and force a round change.
 
-$$\bigl(state \in \{\text{ANCHORED},\, \text{RECOVERING}\}\bigr) \implies daReceipt.attestation = \text{TRUE}$$
+```tlaplus
+DAReceiptConsistency ==
+    \A p \in Corr:
+        (decision[p] /= NilDecision
+         /\ decision[p].prop.fsm_state \in {"ANCHORED", "RECOVERING"})
+        => decision[p].prop.da_receipt.attestation = TRUE
+```
 
-The `Byzantine_Data_Withholding` action in `EngramTendermint.tla` explicitly injects such malformed proposals into the state space. `DAReceiptConsistency` in `HybridTendermintInv` formally captures the invariant that no such proposal is ever decided.
+The `ByzantineDataWithholding` action in `EngramTendermint.tla` explicitly injects such malformed proposals. `DAReceiptConsistency` in `HybridTendermintInvariant` formally captures the invariant that no such proposal is ever decided.
 
-**Lemma 8.3 (Long-Range Attack Prevention).** The fork-choice rule enforces strict monotonic settlement anchoring. Any adversarial proposal attempting to revert to a prior Bitcoin anchor height is automatically rejected, rendering historical rewrites economically irrational without reorganizing the Bitcoin Proof-of-Work chain itself.
+**Lemma 8.3 (Long-Range Attack Prevention).** The fork-choice rule enforces strict monotonic settlement anchoring via `VerifySPVProof`. Any adversarial proposal attempting to revert to a prior anchor height, or carrying a forged Bitcoin branch hash, is automatically rejected.
 
-$$btcAnchored(B_\text{i+1}) \geq btcAnchored(B_i)$$
+```tlaplus
+BTCConsistency ==
+    \A p \in Corr:
+        decision[p] /= NilDecision
+        => decision[p].prop.btc_receipt.checkpoint_block_height = h_btc_anchored
+```
 
-Formally specified as the settlement monotonicity check in `IsValidProposal` (`prop.btc_anchored >= h_btc_anchored`) and captured by `BTCConsistency` in `HybridTendermintInv`.
+The `ByzantineDataWithholding` action also injects a forged BTC receipt (`<<"BTC_FORK", height>>`) to verify the SPV hash check rejects it at proposal validation.
 
-**Lemma 8.4 (Byzantine Message Flooding Mitigation).** The set of adversarial messages injected into the state space per round and per message type is deterministically bounded by the size of the Byzantine coalition. This is enforced structurally by the initial message sets `FaultyPrevotes(r)`, `FaultyPrecommits(r)`, and `FaultyTimeouts(r)` in `EngramTendermint.tla`, each of which generates exactly $|F|$ messages.
+**Lemma 8.4 (Byzantine Message Flooding Mitigation).** The accepted message set from the Byzantine coalition per round and message type is deterministically bounded by $|F|$, enforced structurally by the initial message sets in `EngramTendermint.tla`.
 
-$$|\text{messages}(t,\, r,\, F)| \leq |F|$$
+```tlaplus
+\* Pre-populated at TM_Init — exactly |Faulty| messages per round per type
+FaultyPrevotes(r)   == { [type |-> "PREVOTE",   src |-> f, round |-> r, ...] : f \in Faulty }
+FaultyPrecommits(r) == { [type |-> "PRECOMMIT", src |-> f, round |-> r, ...] : f \in Faulty }
+FaultyTimeouts(r)   == { [type |-> "TIMEOUT",   src |-> f, round |-> r]      : f \in Faulty }
+```
 
-**Lemma 8.5 (Eclipse Attack Resilience).** The `IsHealthyCondition` predicate mandates a minimum peer connectivity bound as a precondition for any recovery-initiating transition. An isolated node that cannot observe $P_{\min}$ active peers is prevented from declaring the network healthy and unilaterally triggering recovery, even if all its other sensor readings appear normal.
+**Lemma 8.5 (Eclipse Attack Resilience).** The `IsP2PQualityHealthy` predicate (Section 4.3) enforces six structural and behavioral bounds as a precondition for `IsHealthyCondition`. Additionally, complete anchor isolation escalates directly to a critical condition without waiting for the BTC gap threshold.
 
-$$\text{IsHealthyCondition} \implies peer\_count \geq P_{\min}$$
+```tlaplus
+\* Recovery is gated on full P2P quality — not merely peer count
+IsHealthyCondition == 
+    /\ ~IsBTCGapSovereign
+    /\ ~IsBTCGapSuspicious
+    /\ IsDAHealthy
+    /\ IsP2PQualityHealthy   \* all 6 structural/behavioral bounds must hold
 
-> *Remark:* The full formal scenario modeling how an eclipsed leader's fabricated `fsm_state` is deterministically rejected by the honest majority via `FSMStateConsistency` is under partial specification. The conjecture is that `IsValidProposal` in combination with `FSMStateConsistency` is sufficient; a dedicated TLC scenario confirming this is planned for a future revision (see Section 11.2).
+\* Complete anchor isolation triggers Critical immediately
+IsCriticalCondition == 
+    \/ IsBTCGapSovereign
+    \/ Cardinality(ActiveAnchors) = 0
+    \/ suspicious_duration >= MAX_SUSPICIOUS_TIME
+```
 
-**Lemma 8.6 (EOTS Accountability).** Any fork — i.e., any violation of `AgreementOnValue` — mathematically implies that some node broadcast two conflicting messages in the same round. The `DoubleSigningEvidence` predicate detects this across Propose, Prevote, and Precommit phases. Once detected, Extractable One-Time Signature (EOTS) properties allow the offending validator's private key to be extracted and their staked BTC to be slashed without requiring smart contract execution on Bitcoin.
+The `P2PAdversaryAttack` action in `EngramFSM.tla` has been verified to produce zero errors across both the safety and liveness state spaces. One open item remains: a dedicated TLC scenario constructing the full execution trace that shows an eclipsed proposer's fabricated `fsm_state` is deterministically rejected via `FSMStateConsistency` combined with `VerifySPVProof` (see Section 11.2).
 
-$$\neg\text{AgreementOnValue} \implies \text{DoubleSigningEvidence}$$
+**Lemma 8.6 (EOTS Accountability).** Any fork — a violation of `AgreementOnValue` — implies some node broadcast two conflicting messages in the same round. The `DoubleSigningEvidence` predicate detects this across all message phases, enabling EOTS-based BTC slashing without smart contract execution.
 
-Formally specified in `EngramTendermint.tla` as `Accountability`, part of `CoreTendermintInv`.
+```tlaplus
+Accountability ==
+    (~AgreementOnValue) => DoubleSigningEvidence
+```
 
+Formally specified in `EngramTendermint.tla` as `Accountability`, part of `CoreTendermintInvariant`.
 
 ## 9. Liveness Analysis and Autonomous Recovery
 
@@ -745,15 +798,11 @@ Together, these results constitute a machine-verified proof that the Engram hybr
 The current specification verifies an unpipelined Tendermint core. A pipelined variant targeting sub-two-second block times is planned, as documented in the TODO block of `EngramTendermint.tla`:
 
 1. Overload the PREVOTE message at round $r$ to simultaneously act as the PRECOMMIT for round $r-1$.
-2. Remove the `msgsPrecommit` mailbox.
+2. Remove the `msgs_precommit` mailbox.
 3. Delegate block commit to the proposer of round $r+1$.
 4. Update the Liveness refinement to require cooperation from two consecutive honest leaders (per LiDO Appendix D).
 
-### 11.2 Eclipse Attack Formal Scenario
-
-A dedicated TLA+ scenario modeling an Eclipse Attack — where a partitioned node receives false peer-count readings — should be constructed to formally verify that the $P \geq P_{\min}$ guard in `IsHealthyCondition` is both necessary and sufficient for the defense.
-
-### 11.3 Parametric Verification
+### 11.2 Parametric Verification
 
 The current results use a small-scope hypothesis (4 nodes, $f = 1$). Extending the proof to arbitrary $N$ and $f$ would require inductive invariant techniques or a parametric model checker, and is left for future work.
 

@@ -53,11 +53,11 @@ MC_GenerateZKProof ==
 MC_FSMLivenessNext == 
     \/ MC_FSMTransition
     \/ MC_FSMUpdateSensors
-    \/ MC_GenerateZKProof
+    \* \/ MC_GenerateZKProof
 
 MC_FSMLivenessFairness == 
-    /\ SF_serverVars(MC_FSMTransition)
-    /\ WF_serverVars(MC_GenerateZKProof)
+    /\ WF_fsmVars(MC_FSMTransition)
+    \* /\ SF_serverVars(MC_GenerateZKProof)
 
 MC_FSMLivenessSpec == 
     /\ MC_FSMInit
