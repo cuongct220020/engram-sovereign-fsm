@@ -15,12 +15,15 @@ EXTENDS Integers, FiniteSets, EngramVars
 CONSTANTS
     SUSPICIOUS_THRESHOLD,   \* BTC gap threshold for Gray Failure warning
     SOVEREIGN_THRESHOLD,    \* BTC gap threshold for Hard Failure (circuit-break)
+    
     MIN_PEERS,              \* Minimum clean peers required to avoid isolation
     MIN_SUBNET_DIVERSITY,   \* Minimum distinct subnets required
     MIN_ANCHOR_PEERS,       \* Minimum active anchor/bootstrap peers required
     MAX_CHURN_RATE,         \* Maximum allowed peer disconnects/reconnects per epoch
     MIN_AVG_TENURE,         \* Minimum average age of connections in the routing table
-    MAX_PEER_LATENCY        \* Maximum allowable delay for heartbeat/block propagation
+    MAX_PEER_LATENCY,       \* Maximum allowable delay for heartbeat/block propagation
+    
+    MAX_SUSPICIOUS_TIME     \* Maximum ticks/blocks the system tolerates in SUSPICIOUS state before escalating to SOVEREIGN
 
 ASSUME
     /\ SUSPICIOUS_THRESHOLD \in Nat
@@ -91,8 +94,11 @@ IsBTCGapSovereign == btc_gap >= SOVEREIGN_THRESHOLD
 \* Withdrawal guard: TRUE whenever cross-chain withdrawals must be halted
 WithdrawLocked == state \in {"SOVEREIGN", "RECOVERING"}
 
-\* Hard failure: BTC gap has crossed the sovereign threshold
-IsCriticalCondition == IsBTCGapSovereign
+\* Hard failure: BTC gap crossed threshold OR Total Loss of Anchor Peers (Complete Eclipse)
+IsCriticalCondition == 
+    \/ IsBTCGapSovereign
+    \/ Cardinality(ActiveAnchors) = 0
+    \/ suspicious_duration >= MAX_SUSPICIOUS_TIME
 
 \* Soft warning: BTC gap is elevated, or DA/P2P shows degradation
 IsWarningCondition == 
@@ -142,6 +148,7 @@ FSMInit ==
     /\ peer_churn_rate = 0 /\ avg_peer_tenure = MIN_AVG_TENURE /\ peer_latency = 0
     /\ safe_blocks = 0
     /\ reanchoring_proof_valid = FALSE
+    /\ suspicious_duration = 0
 
 
 
@@ -151,14 +158,16 @@ UpdateBTCSensor ==
     /\ h_btc_current'   \in {h_btc_current,   h_btc_current + 1}
     /\ h_btc_submitted' \in {h_btc_submitted, h_btc_current'}
     /\ h_btc_anchored'  \in {h_btc_anchored,  h_btc_submitted'}
-    /\ UNCHANGED <<state, daSensorVars, p2pSensorVars, safe_blocks, reanchoring_proof_valid>>
+    /\ UNCHANGED <<state, safe_blocks, suspicious_duration, reanchoring_proof_valid>>
+    /\ UNCHANGED <<daSensorVars, p2pSensorVars>>
 
 \* Update DA Sensor
 UpdateDASensor == 
     /\ h_engram_current' \in {h_engram_current, h_engram_current + 1}
     /\ h_engram_verified' \in {h_engram_verified, h_engram_current'}
     /\ is_das_failed' \in BOOLEAN
-    /\ UNCHANGED <<state, btcSensorVars, p2pSensorVars, safe_blocks>>
+    /\ UNCHANGED <<state, safe_blocks, suspicious_duration>>
+    /\ UNCHANGED <<btcSensorVars, p2pSensorVars>>
 
 
 \* Update P2P Health Sensor
@@ -188,7 +197,8 @@ UpdateP2PHealthSensor ==
     /\ (P2PNormalUpdate \/ P2PAdversaryAttack)
     /\ anchor_peers' = anchor_peers
     /\ blacklisted_peers' = blacklisted_peers
-    /\ UNCHANGED <<state, btcSensorVars, daSensorVars, safe_blocks>>
+    /\ UNCHANGED <<state, safe_blocks, suspicious_duration>>
+    /\ UNCHANGED <<btcSensorVars, daSensorVars>>
 
 \* Non-deterministic environment update that simulates the real network.
 UpdateSensors ==
@@ -225,14 +235,22 @@ CalculateNextFSMState ==
 
 
 \* Action: write the FSM transition and update the hysteresis counter.
-ExecuteFSMTransition(target_state) ==
+ExecuteFSMTransition(target_state) == 
     /\ state'       = target_state
-    /\ safe_blocks' =
-           IF target_state = "RECOVERING" /\ state = "SOVEREIGN"
-           THEN 0                   \* Reset counter on first entry into RECOVERING
-           ELSE IF target_state = "RECOVERING"
-                THEN safe_blocks + 1  \* Increment hysteresis counter each RECOVERING block
-                ELSE 0
+    
+    /\ suspicious_duration' = IF target_state = "SUSPICIOUS" /\ state = "SUSPICIOUS" 
+                              THEN suspicious_duration + 1
+                              ELSE IF target_state = "SUSPICIOUS" 
+                                   THEN 1 
+                                   ELSE 0
+                                   
+    /\ safe_blocks' = IF target_state = "RECOVERING" /\ state = "SOVEREIGN" 
+                      THEN 0                   
+                      ELSE IF target_state = "RECOVERING" /\ safe_blocks < HYSTERESIS_WAIT 
+                           THEN safe_blocks + 1  
+                           ELSE IF target_state = "RECOVERING"
+                                THEN safe_blocks
+                                ELSE 0
 
 (* ======================== THE NEXT-STATE ACTION (FOR UNIT TEST) ============ *)
 FSMNext == 
@@ -286,7 +304,7 @@ ZKProofGenerationLiveness ==
     (state = "RECOVERING" /\ IsHealthyCondition) ~> (reanchoring_proof_valid = TRUE)
 
 \* Liveness 5: Persistent network anomalies must eventually trigger a circuit-break or recovery.
-PersistentEclipseResolution == 
+PersistentEclipseResolutionLiveness == 
     ([]<> ~IsP2PQualityHealthy) ~> (state \in {"SOVEREIGN", "ANCHORED"})
 
 =============================================================================

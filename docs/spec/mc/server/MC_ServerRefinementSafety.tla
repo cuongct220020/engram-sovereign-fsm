@@ -39,18 +39,18 @@ MC_ServerNext == ServerNext
 (* ======================== STATE SPACE PRUNING CONSTRAINT ================= *)
 \* Bounds are deliberately tighter than Liveness to keep safety runs tractable.
 StateSpaceLimit ==
-    \* -- Tendermint bounds --
+    \* Tendermint bounds
     /\ \A n \in MC_Corr : round[n] <= MAX_ROUND
     /\ real_time <= MAX_TIMESTAMP
 
-    \* -- Chain height bounds (monotone by construction, but TLC needs explicit caps) --
+    \* Chain height bounds (monotone by construction, but TLC needs explicit caps)
     /\ h_btc_current <= MAX_BTC_HEIGHT
     /\ h_engram_current <= MAX_ENGRAM_HEIGHT
     /\ h_engram_verified <= h_engram_current
     /\ h_btc_submitted <= h_btc_current
     /\ h_btc_anchored <= h_btc_submitted
 
-    \* -- P2P network size --
+    \* P2P network size
     /\ Cardinality(active_peers) \in {2, 3}
     /\ Cardinality(anchor_peers) <= 3
     /\ Cardinality(blacklisted_peers) <= 2
@@ -58,7 +58,7 @@ StateSpaceLimit ==
     /\ avg_peer_tenure <= MIN_AVG_TENURE + 100
     /\ peer_latency <= MAX_PEER_LATENCY + 10
 
-    \* -- DAS failure is binary, state already constrained by FSM invariant --
+    \* DAS failure is binary, state already constrained by FSM invariant
     /\ is_das_failed \in BOOLEAN
     /\ state \in {"ANCHORED", "SUSPICIOUS", "SOVEREIGN", "RECOVERING"}
 

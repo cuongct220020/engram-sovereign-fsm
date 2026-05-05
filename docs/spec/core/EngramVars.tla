@@ -108,11 +108,12 @@ btcSensorVars == <<h_btc_current, h_btc_submitted, h_btc_anchored>>
 VARIABLES
     state,                   \* FSM state: "ANCHORED"|"SUSPICIOUS"|"SOVEREIGN"|"RECOVERING"
     safe_blocks,             \* Consecutive healthy blocks counted during RECOVERING
+    suspicious_duration,     \* Count the number of system blocks/ticks stuck in SUSPICIOUS
     reanchoring_proof_valid  \* Boolean: ZK re-anchoring proof confirmed on-chain
 
 \* Top-level FSM tuple consumed by EngramTendermint actions
 fsmVars ==
-    <<state, safe_blocks, reanchoring_proof_valid, 
+    <<state, safe_blocks, suspicious_duration, reanchoring_proof_valid, 
         btcSensorVars, daSensorVars, p2pSensorVars>>
 
 
