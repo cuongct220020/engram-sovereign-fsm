@@ -171,6 +171,7 @@ UpdateDASensor ==
 
 
 \* Update P2P Health Sensor
+\* The node is connected to a healthy mix of anchor peers and honest nodes.
 P2PNormalUpdate ==
     /\ active_peers' \in { anchor_peers, anchor_peers \cup {"honest_n1"} }
     /\ peer_churn_rate' \in {0, MAX_CHURN_RATE}
@@ -178,19 +179,49 @@ P2PNormalUpdate ==
     /\ peer_latency'    \in {0, MAX_PEER_LATENCY}
 
 
-P2PAdversaryAttack ==
-    \* ADVERSARY EXPLOITS THE "WEAKEST LINK" (DEFENSE-IN-DEPTH TEST)
-    \* The adversary non-deterministically chooses to eclipse 1 of the 3 external/internal network interfaces.
-    /\ \E target_network \in {"ENGRAM_P2P", "BTC_SPV", "CELESTIA_DA"} : 
-        /\ \E p \in active_peers : 
-            \* Abstraction: Regardless of the targeted interface, the "Test-before-evict" mechanism strictly protects Anchor peers.
-            /\ p \notin ActiveAnchors  
-            /\ active_peers' = (active_peers \ {p}) \cup {"sybil_n1"}
+\* Attack Scenario 1: Relay-node latency injection
+\* The adversary inserts a proxy/relay node into the routing path to intercept messages.
+\* This physically forces the peer latency to spike beyond the acceptable threshold.
+ActionRelayNodeAttack == 
+    /\ peer_latency' = MAX_PEER_LATENCY + 10  
+    /\ UNCHANGED <<active_peers, peer_churn_rate, avg_peer_tenure>> 
+
+
+\* Attack Scenario 2: BGP Hijacking / Connection Hijacking
+\* The adversary manipulates BGP routes to isolate the victim at the infrastructure level.
+\* The victim's active peer set is entirely replaced by Sybil nodes from a single ASN/subnet.
+ActionBGPHijacking == 
+    /\ active_peers' = {"sybil_n1", "sybil_n2", "sybil_n3"} 
+    /\ UNCHANGED <<peer_latency, peer_churn_rate, avg_peer_tenure>>
+
+
+\* Attack Scenario 3: Churn-based IP rotation (Dynamic Peer Replacement)
+\* The adversary continuously rotates malicious IP addresses to evade static firewalls.
+\* This triggers a high network churn rate and reduces the average peer tenure to zero.
+ActionChurnBasedRotation == 
+    /\ peer_churn_rate' = MAX_CHURN_RATE + 5  
+    /\ avg_peer_tenure' = 0                   
+    /\ UNCHANGED <<active_peers, peer_latency>>
+
+\* TODO: Add attack audit log for TLC trace log
+P2PAdversaryAttack ==         
+    \/ ActionRelayNodeAttack 
+    \/ ActionBGPHijacking 
+    \/ ActionChurnBasedRotation
+
+\* P2PAdversaryAttack ==
+\*     \* ADVERSARY EXPLOITS THE "WEAKEST LINK" (DEFENSE-IN-DEPTH TEST)
+\*     \* The adversary non-deterministically chooses to eclipse 1 of the 3 external/internal network interfaces.
+\*     /\ \E target_network \in {"ENGRAM_P2P", "BTC_SPV", "CELESTIA_DA"} : 
+\*         /\ \E p \in active_peers : 
+\*             \* Abstraction: Regardless of the targeted interface, the "Test-before-evict" mechanism strictly protects Anchor peers.
+\*             /\ p \notin ActiveAnchors  
+\*             /\ active_peers' = (active_peers \ {p}) \cup {"sybil_n1"}
             
-    \* Aggregated consequences reflected on the Holistic Monitor (Cross-interface P2P Health Sensor)
-    /\ peer_churn_rate' = MAX_CHURN_RATE + 1 \* Triggers network churn alarm (Dynamic Replacement / Handover)
-    /\ avg_peer_tenure' = 0 \* Triggers Sybil alarm (Adversary nodes have 0 tenure)
-    /\ peer_latency' = MAX_PEER_LATENCY + 10  \* Simulates latency spikes caused by Relay Nodes or BGP Hijacking
+\*     \* Aggregated consequences reflected on the Holistic Monitor (Cross-interface P2P Health Sensor)
+\*     /\ peer_churn_rate' = MAX_CHURN_RATE + 1    \* Triggers network churn alarm (Dynamic Replacement / Handover)
+\*     /\ avg_peer_tenure' = 0                     \* Triggers Sybil alarm (Adversary nodes have 0 tenure)
+\*     /\ peer_latency' = MAX_PEER_LATENCY + 10    \* Simulates latency spikes caused by Relay Nodes or BGP Hijacking
 
 
 UpdateP2PHealthSensor == 
