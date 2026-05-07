@@ -58,8 +58,9 @@ StateSpaceLimit ==
     /\ avg_peer_tenure <= MIN_AVG_TENURE + 100
     /\ peer_latency <= MAX_PEER_LATENCY + 10
 
-    \* DAS failure is binary, state already constrained by FSM invariant
+    /\ is_btc_spv_failed \in BOOLEAN
     /\ is_das_failed \in BOOLEAN
+    /\ is_attestation_failed \in BOOLEAN
     /\ state \in {"ANCHORED", "SUSPICIOUS", "SOVEREIGN", "RECOVERING"}
 
 

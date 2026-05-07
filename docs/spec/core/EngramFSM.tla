@@ -160,30 +160,55 @@ FSMInit ==
 
 
 (* ======================== ENVIRONMENT SENSOR UPDATE ======================= *)
-\* Update BTC Finality Gap Sensor
-UpdateBTCSensor == 
-    /\ h_btc_current'   \in {h_btc_current,   h_btc_current + 1}
+
+\* ------------------- 1. BTC FINALITY GAP SENSOR -------------------
+
+\* Scenario 1: SPV operates normally; the anchor advances to the submitted height.
+BTCNormalUpdate ==
+    /\ h_btc_current' \in {h_btc_current, h_btc_current + 1}
     /\ h_btc_submitted' \in {h_btc_submitted, h_btc_current'}
-    /\ h_btc_anchored'  \in {h_btc_anchored,  h_btc_submitted'}
-    /\ is_btc_spv_failed' \in BOOLEAN
-    /\ h_btc_anchored' \in { IF ~is_btc_spv_failed'
-                              THEN h_btc_submitted'   \* SPV passed: anchor can advance
-                              ELSE h_btc_anchored }   \* SPV failed: anchor frozen
-    /\ UNCHANGED <<state, safe_blocks, suspicious_duration, reanchoring_proof_valid>>
+    /\ is_btc_spv_failed' = FALSE
+    /\ h_btc_anchored' = h_btc_submitted'   \* SPV verification passed: anchor can advance
+    /\ UNCHANGED <<state, safe_blocks, suspicious_duration, reanchoring_proof_valid>> 
     /\ UNCHANGED <<daSensorVars, p2pSensorVars>>
 
-\* Update DA Sensor
-UpdateDASensor == 
+\* Scenario 2: SPV fails or is under attack; the anchor is throttled (frozen).
+ActionBTCSPVFailure ==
+    /\ h_btc_current' \in {h_btc_current, h_btc_current + 1}
+    /\ h_btc_submitted' \in {h_btc_submitted, h_btc_current'}
+    /\ is_btc_spv_failed' = TRUE
+    /\ h_btc_anchored' = h_btc_anchored     \* SPV verification failed: anchor is frozen
+    /\ UNCHANGED <<state, safe_blocks, suspicious_duration, reanchoring_proof_valid>> 
+    /\ UNCHANGED <<daSensorVars, p2pSensorVars>>
+
+UpdateBTCSensor == BTCNormalUpdate \/ ActionBTCSPVFailure
+
+
+\* ------------------- 2. DATA AVAILABILITY SENSOR -------------------
+
+\* Scenario 1: DA Layer is healthy; attestation succeeds.
+DANormalUpdate ==
     /\ h_engram_current' \in {h_engram_current, h_engram_current + 1}
-    /\ h_engram_verified' \in {h_engram_verified, h_engram_current'}
-    /\ is_attestation_failed' \in BOOLEAN 
-    /\ is_das_failed' \in BOOLEAN
-    /\ h_engram_verified' \in { IF ~is_attestation_failed'
-                                THEN h_engram_verified'     \* DA attestion passed: published confirmation
-                                ELSE h_engram_verified}     \* DA attestion failed: not published confirmation
-    /\ UNCHANGED <<state, safe_blocks, suspicious_duration>>
+    /\ is_attestation_failed' = FALSE
+    /\ is_das_failed' = FALSE
+    /\ h_engram_verified' = h_engram_current' \* DA attestation passed: allowed to update to current height
+    /\ UNCHANGED <<state, safe_blocks, suspicious_duration>> 
     /\ UNCHANGED <<btcSensorVars, p2pSensorVars>>
 
+\* Scenario 2: DA Layer reports failure (Data Withholding attack or Blobstream disconnect).
+ActionDAFailure ==
+    /\ h_engram_current' \in {h_engram_current, h_engram_current + 1}
+    /\ is_attestation_failed' \in BOOLEAN
+    /\ is_das_failed' \in BOOLEAN
+    /\ \/ is_attestation_failed' = TRUE
+       \/ is_das_failed' = TRUE
+    /\ h_engram_verified' = h_engram_verified \* DA failure: verification is throttled (frozen)
+    /\ UNCHANGED <<state, safe_blocks, suspicious_duration>> 
+    /\ UNCHANGED <<btcSensorVars, p2pSensorVars>>
+
+UpdateDASensor == DANormalUpdate \/ ActionDAFailure
+
+\* ------------------- 3. P2P HEALTH SENSOR -------------------
 
 \* Update P2P Health Sensor
 \* The node is connected to a healthy mix of anchor peers and honest nodes.

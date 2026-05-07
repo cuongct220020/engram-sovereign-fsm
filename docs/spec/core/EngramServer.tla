@@ -49,7 +49,7 @@ ServerInsertProposal(p) ==
 
                da_receipt == [
                    published_block_height   |-> h_engram_verified,
-                   attestation              |-> IsDAHealthy
+                   attestation              |-> ~is_attestation_failed
                ]
 
                btc_receipt == [
