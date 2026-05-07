@@ -19,6 +19,7 @@
     - [3.3 Layered Specification Architecture](#33-layered-specification-architecture)
   - [4. Network Sensors: Measuring Peripheral Layer Health](#4-network-sensors-measuring-peripheral-layer-health)
     - [4.1 Bitcoin Finality Gap Sensor](#41-bitcoin-finality-gap-sensor)
+      - [Bitcoin SPV Verification](#bitcoin-spv-verification)
     - [4.2 Data Availability Gap Sensor](#42-data-availability-gap-sensor)
       - [Data Availability Sampling (DAS)](#data-availability-sampling-das)
     - [4.3 P2P Health Sensor (Tri-interface Profiler)](#43-p2p-health-sensor-tri-interface-profiler)
@@ -38,31 +39,19 @@
   - [9. Liveness Analysis and Autonomous Recovery](#9-liveness-analysis-and-autonomous-recovery)
     - [9.1 FSM Temporal Properties](#91-fsm-temporal-properties)
     - [9.2 Transaction-Level Liveness](#92-transaction-level-liveness)
-  - [10. Verification Results](#10-verification-results)
+  - [10. Formal Verfication stress & ablation](#10-formal-verification-stress--ablation)
     - [10.1 Proof Strategy](#101-proof-strategy)
-    - [10.2 Model Parameters](#102-model-parameters)
-    - [10.3 Safety Verification](#103-safety-verification)
-    - [10.4 Liveness Verification](#104-liveness-verification)
-    - [10.5 Interpretation](#105-interpretation)
-  - [11. Future Work](#11-future-work)
-    - [11.1 Pipelined Tendermint (Phase Merging)](#111-pipelined-tendermint-phase-merging)
-    - [11.2 Parametric Verification](#112-parametric-verification)
-  - [12. How to Run the Verification](#12-how-to-run-the-verification)
-    - [Prerequisites](#prerequisites)
-    - [Safety Verification](#safety-verification)
-    - [Liveness Verification](#liveness-verification)
-    - [Using VS Code](#using-vs-code)
-  - [Appendix: File Structure](#appendix-file-structure)
+    - [10.2 Formal Verification stress test](#102-formal-verification-stress-test)
+    - [10.3 TLC Counterexample traces analysis](#103-tlc-counterexample-traces-analysis)
   - [References](#references)
+  - [Future Work](#11-future-work)
+  - [How to Run the Verification](#how-to-run-the-verification)
 
 ## Abstract
 
 This document presents the formal specification and model-checked verification of the **Hybrid Adaptive Consensus** protocol for the Engram modular blockchain. The core research question is: **Can a blockchain that depends on external settlement (Bitcoin) and data availability (Celestia) layers maintain provable Safety and Liveness even when those layers fail?**
 
 We answer affirmatively. The protocol introduces a Finite State Machine (FSM) that autonomously degrades security level — rather than halting — when external dependencies become unavailable. **Critically, the consensus mechanism is extended beyond classical transaction ordering: validators now reach Byzantine-fault-tolerant agreement on both the application state and the health status of the peripheral network layers, treating the FSM state as a first-class consensus variable.**
-
-All safety invariants and liveness properties are formally verified using the TLC model checker against a state space of **37.7 million states** (safety, 1h 40min) and **1.1 million states** (liveness, 6m 52s), with zero errors found.
-
 
 ## 1. Problem Statement
 
@@ -275,22 +264,7 @@ The gap formula measures *delay*, but cannot detect *forged* checkpoint data. An
 1. **OP_RETURN Inclusion Check**: verify via Merkle proof that the Engram checkpoint transaction is included in the claimed Bitcoin block.
 2. **Block Header Verification**: hash the block header to confirm `checkpoint_block_hash` matches the canonical chain maintained by the local SPV client.
 
-The combined result is stored as a single boolean `is_btc_spv_failed` in local state. Unlike `is_das_failed`, this flag does not directly enter `IsWarningCondition` — because a failed SPV check already prevents `h_btc_anchored` from advancing, causing `btc_gap` to grow and trigger the warning condition naturally. Its primary roles are:
-
-- **Integrity guard on `h_btc_anchored`**: the anchor height only advances when `is_btc_spv_failed = FALSE`, preventing a forged checkpoint from being counted as confirmed.
-- **Proposal validation**: `VerifySPVProof(btc_receipt)` in `IsValidProposal` cross-checks the leader's claimed `checkpoint_block_hash` against the locally cached canonical hash, rejecting Eclipse-forged Bitcoin branches before they enter the voting phase.
-
-```tlaplus
-\* h_btc_anchored only advances when SPV verification passes
-UpdateBTCSensor == 
-    /\ is_btc_spv_failed' \in BOOLEAN
-    /\ h_btc_anchored' \in { IF ~is_btc_spv_failed'
-                              THEN h_btc_submitted'   \* SPV passed: anchor can advance
-                              ELSE h_btc_anchored }   \* SPV failed: anchor frozen
-    /\ ...
-```
-
-This design is intentionally asymmetric with `is_das_failed`: DA sampling is a detection signal that must surface immediately as a warning, whereas SPV failure is an integrity constraint whose effect propagates through the gap metric.
+The combined result is stored as a single boolean `is_btc_spv_failed` in local state. Unlike `is_das_failed`, this flag does not directly enter `IsWarningCondition` — because a failed SPV check already prevents `h_btc_anchored` from advancing, causing `btc_gap` to grow and trigger the warning condition naturally.
 
 ### 4.2 Data Availability Gap Sensor
 
@@ -448,40 +422,61 @@ Crucially, the objective of the re-anchoring circuit is **not** to prove the cor
 
 This fundamental scoping minimizes the arithmetization size and constraint count, keeping the prover cost practically low while maintaining an $O(1)$ verification time and minimal proof size suitable for on-chain or off-chain DA validation.
 
-* **Cryptographic Assumptions**
+**1. Cryptographic Assumptions**
 
 The re-anchoring proof relies on standard cryptographic assumptions:
-  * **Random Oracle Model (ROM):** The cryptographic hash function (Poseidon2) is modeled as a random oracle to ensure collision resistance within the circuit.
-  * **Knowledge Soundness:** There exists a polynomial-time extractor such that if a prover can produce a valid proof $\pi_{RA}$, they must possess the valid underlying witness $w$.
 
-* **2. Re-anchoring Relation and Predicate**
+- **Random Oracle Model (ROM):** The cryptographic hash function (Poseidon2) is modeled as a random oracle to ensure collision resistance within the circuit.
+- **Knowledge Soundness:** There exists a polynomial-time extractor such that if a prover can produce a valid proof $\pi_{RA}$, they must possess the valid underlying witness $w$.
+
+**2. Re-anchoring Relation and Predicate**
 
 We formally define the re-anchoring relation $\mathcal{R}_{RA}$ to separate public inputs $x$ from the private witness $w$. Rather than proving complex transaction bodies, the witness $w$ consists solely of the sequence of lightweight block headers generated during the disconnection.
 
 Let $rt_{last}$ be the state root of the last Bitcoin-anchored block, and $rt_{new}$ be the state root of the proposed recovered block. 
 
-$$x = (rt_{last}, rt_{new}, n)$$
-$$w = (H_{k+1}, H_{k+2}, \dots, H_{k+n})$$
+```math
+x = (rt_{last}, rt_{new}, n)
+```
+
+```math
+w = (H_{k+1}, H_{k+2}, \dots, H_{k+n})
+```
 
 The Zero-Knowledge predicate $\Phi_{Recovery}(x, w) = 1$ is satisfied if and only if the following strict conditions hold:
 
-$$
-\Phi_{Recovery}(x, w) = 1 \iff 
-\begin{cases} 
-(1) & \forall i \in [n-1]:\ H_{k+i+1}.\text{prev\_hash} = \text{Poseidon2}(H_{k+i}) \\ 
-(2) & \forall i \in [n]:\ H_{k+i}.\text{fsm\_state} \in \{\texttt{SOVEREIGN}, \texttt{RECOVERING}\} \\ 
-(3) & \forall i \in [n]:\ H_{k+i}.\text{withdrawal\_locked} = \text{true} \\ 
-(4) & H_{k+1}.\text{old\_state\_root} = rt_{last} \land H_{k+n}.\text{new\_state\_root} = rt_{new} 
-\end{cases}
-$$
+**(a)**
 
-* **3. Circuit Guarantees**
+```math
+\forall i \in [n-1],\; H_{k+i+1}.\mathrm{prev\_hash} = \mathrm{Poseidon2}(H_{k+i})
+```
+
+**(b)**
+
+```math
+\forall i \in [n],\; H_{k+i}.\mathrm{fsm\_state} \in \{\texttt{SOVEREIGN},\texttt{RECOVERING}\}
+```
+
+**(c)**
+
+```math
+\forall i \in [n],\; H_{k+i}.\mathrm{withdrawal\_locked} = \mathrm{true}
+```
+
+**(d)**
+
+```math
+H_{k+1}.\mathrm{old\_state\_root}=rt_{\mathrm{last}} \land H_{k+n}.\mathrm{new\_state\_root}=rt_{\mathrm{new}}
+```
+
+**3. Circuit Guarantees**
 
 By verifying $\Phi_{Recovery}(x, w) = 1$, the verifier $V(x, \pi_{RA})$ mathematically guarantees four core system invariants without re-executing a single transaction:
-  * **Condition (1) - Continuity:** Ensures the historical hash-chain is unbroken and no adversarial blocks were injected or reordered.
-  * **Condition (2) - Policy Adherence:** Ensures the system strictly followed the FSM transition rules, blocking any illegal jumps to `ANCHORED`.
-  * **Condition (3) - Economic Circuit Breaker:** Guarantees that absolutely no cross-chain withdrawals were permitted during the period of reduced security, completely mitigating double-spending extraction risks.
-  * **Condition (4) - State Consistency:** Cryptographically anchors the new Merkle state root to the validated unbroken header chain.
+
+- **Condition (1) - Continuity:** Ensures the historical hash-chain is unbroken and no adversarial blocks were injected or reordered.
+- **Condition (2) - Policy Adherence:** Ensures the system strictly followed the FSM transition rules, blocking any illegal jumps to `ANCHORED`.
+- **Condition (3) - Economic Circuit Breaker:** Guarantees that absolutely no cross-chain withdrawals were permitted during the period of reduced security, completely mitigating double-spending extraction risks.
+- **Condition (4) - State Consistency:** Cryptographically anchors the new Merkle state root to the validated unbroken header chain.
 
 By restricting the circuit to header verification and boolean flag checks, the constraint count remains highly optimized. A single proof (utilizing Noir with an UltraPlonk/Honk backend) aggregates the entire sovereign history into a constant-size proof, yielding negligible overhead on the critical consensus path.
 
@@ -798,7 +793,7 @@ ForcedInclusionLiveness ==
 
 Formally specified as `ForcedInclusionLiveness` in `EngramServer.tla`.
 
-## 10. Verification Results
+## 10. Formal Verification stress & ablation
 ### 10.1 Proof Strategy
 
 The verification proceeds in two phases:
@@ -813,95 +808,180 @@ $$\forall\, q_1, q_2 \in \text{ValidQuorums} : (q_1 \cap q_2) \cap \text{Corr} \
 
 This ensures that any two quorum decisions share at least one honest node, which is the foundation of both Agreement and Liveness in the LiDO model.
 
-### 10.2 Model Parameters
+### 10.2. Formal Verification stress test
 
-| Parameter | Safety | Liveness | Meaning |
-|---|---|---|---|
-| $N$ | 4 | 4 | Total nodes |
-| $T$ | 1 | 1 | Byzantine nodes |
-| MaxRound | 3 | 2 | Consensus rounds explored |
-| MaxBTCHeight | 3 | 2 | Bitcoin height range |
-| MaxEngramHeight | 3 | 2 | Engram height range |
-| T\_SUSPICIOUS | 1 | 1 | BTC gap warning threshold |
-| T\_SOVEREIGN | 2 | 2 | BTC gap critical threshold |
-| T\_DA | 2 | 2 | DA gap threshold |
-| HYSTERESIS\_WAIT | 1 | 1 | Safe blocks for recovery |
-| MIN\_PEERS | 2 | 2 | Minimum healthy peers |
+> Parameters(N, f, MaxRound, MaxBTCHegiht, MaxEngramHeight)
 
-### 10.3 Safety Verification
+#### Safety Verification results
 
-```
-Command : tlc -workers 8 -config mc/server/MC_ServerRefinementSafety.cfg
-                          mc/server/MC_ServerRefinementSafety.tla
+<table>
+  <thead>
+    <tr>
+      <th>Config</th>
+      <th>Parameters</th>
+      <th>Target Scenario</th>
+      <th>States Generated</th>
+      <th>Distinct States</th>
+      <th>Depth</th>
+      <th>Time</th>
+      <th>Violations</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>C1</strong></td>
+      <td>4, 1, 3, 3, 3</td>
+      <td>Baseline reproduction</td>
+      <td>[Từ TLC]</td>     <!-- States Generated -->
+      <td>[Từ TLC]</td>     <!-- Distinct States -->
+      <td>10</td>           <!-- Search Depth -->
+      <td>[Từ TLC]</td>     <!-- Execution Time -->
+      <td>0</td>            <!-- Violations Found -->
+    </tr>
+    <tr>
+      <td><strong>C2</strong></td>
+      <td>4, 1, 5, 4, 4</td>
+      <td>Deep consensus rounds</td>
+      <td>[Từ TLC]</td>     <!-- States Generated -->
+      <td>[Từ TLC]</td>     <!-- Distinct States -->
+      <td>10</td>           <!-- Search Depth -->
+      <td>[Từ TLC]</td>     <!-- Execution Time -->
+      <td>0</td>            <!-- Violations Found -->
+    </tr>
+    <tr>
+      <td><strong>C3</strong></td>
+      <td>7, 2, 3, 3, 3</td>
+      <td>Expanded quorum overlap</td>
+      <td>[Từ TLC]</td>     <!-- States Generated -->
+      <td>[Từ TLC]</td>     <!-- Distinct States -->
+      <td>10</td>           <!-- Search Depth -->
+      <td>[Từ TLC]</td>     <!-- Execution Time -->
+      <td>0</td>            <!-- Violations Found -->
+    </tr>
+    <tr>
+      <td><strong>C4</strong></td>
+      <td>4, 1, 3, 3, 3</td>
+      <td>Simultaneous BTC+DA+P2P failure</td>
+      <td>[Từ TLC]</td>     <!-- States Generated -->
+      <td>[Từ TLC]</td>     <!-- Distinct States -->
+      <td>10</td>           <!-- Search Depth -->
+      <td>[Từ TLC]</td>     <!-- Execution Time -->
+      <td>0</td>            <!-- Violations Found -->
+    </tr>
+    <tr>
+      <td><strong>C5</strong></td>
+      <td>4, 1, 3, 3, 3</td>
+      <td>Byzantine proposer</td>
+      <td>[Từ TLC]</td>     <!-- States Generated -->
+      <td>[Từ TLC]</td>     <!-- Distinct States -->
+      <td>10</td>           <!-- Search Depth -->
+      <td>[Từ TLC]</td>     <!-- Execution Time -->
+      <td>0</td>            <!-- Violations Found -->
+    </tr>
+  </tbody>
+</table>
 
-Started : 2026-04-28 15:34:07
-Finished: 2026-04-28 17:14:09   (1 hour 40 minutes)
-Platform: Mac OS X 26.2 aarch64, 8 workers, 3641 MB heap
+#### Liveness Verification results
 
-States generated  : 37,764,737
-Distinct states   : 179,200
-States on queue   : 0
-Search depth      : 14
-Avg. outdegree    : 1  (min 0, max 31, 95th percentile 4)
+<table>
+  <thead>
+    <tr>
+      <th>Config</th>
+      <th>Parameters</th>
+      <th>Target Scenario</th>
+      <th>States Generated</th>
+      <th>Distinct States</th>
+      <th>Depth</th>
+      <th>Time</th>
+      <th>Violations</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>C1</strong></td>
+      <td>4, 1, 2, 2, 2</td>
+      <td>Baseline reproduction</td>
+      <td>[Từ TLC]</td>     <!-- States Generated -->
+      <td>[Từ TLC]</td>     <!-- Distinct States -->
+      <td>[Từ TLC]</td>     <!-- Search Depth -->
+      <td>[Từ TLC]</td>     <!-- Execution Time -->
+      <td>0</td>            <!-- Violations Found -->
+    </tr>
+    <tr>
+      <td><strong>C2</strong></td>
+      <td>4, 1, 3, 3, 3</td>
+      <td>Deep consensus rounds</td>
+      <td>[Từ TLC]</td>     <!-- States Generated -->
+      <td>[Từ TLC]</td>     <!-- Distinct States -->
+      <td>10</td>           <!-- Search Depth -->
+      <td>[Từ TLC]</td>     <!-- Execution Time -->
+      <td>0</td>            <!-- Violations Found -->
+    </tr>
+    <tr>
+      <td><strong>C3</strong></td>
+      <td>7, 2, 2, 2, 2</td>
+      <td>Expanded quorum overlap</td>
+      <td>[Từ TLC]</td>     <!-- States Generated -->
+      <td>[Từ TLC]</td>     <!-- Distinct States -->
+      <td>10</td>           <!-- Search Depth -->
+      <td>[Từ TLC]</td>     <!-- Execution Time -->
+      <td>0</td>            <!-- Violations Found -->
+    </tr>
+    <tr>
+      <td><strong>C4</strong></td>
+      <td>4, 1, 2, 2, 2</td>
+      <td>Simultaneous BTC+DA+P2P failure</td>
+      <td>[Từ TLC]</td>     <!-- States Generated -->
+      <td>[Từ TLC]</td>     <!-- Distinct States -->
+      <td>10</td>           <!-- Search Depth -->
+      <td>[Từ TLC]</td>     <!-- Execution Time -->
+      <td>0</td>            <!-- Violations Found -->
+    </tr>
+    <tr>
+      <td><strong>C5</strong></td>
+      <td>4, 1, 2, 2, 2</td>
+      <td>Byzantine proposer</td>
+      <td>[Từ TLC]</td>     <!-- States Generated -->
+      <td>[Từ TLC]</td>     <!-- Distinct States -->
+      <td>10</td>           <!-- Search Depth -->
+      <td>[Từ TLC]</td>     <!-- Execution Time -->
+      <td>0</td>            <!-- Violations Found -->
+    </tr>
+  </tbody>
+</table>
 
-Fingerprint collision probability:
-  Optimistic estimate : 3.7E-7
-  Actual fingerprints : 5.0E-9
+### 10.3. TLC Counterexample traces analysis
 
-Result: Model checking completed. No error has been found.
-```
+#### Remove Hysteresis
 
-Invariants verified (zero violations across all 179,200 distinct states):
+#### Remove P2P Health Gate
 
-| Invariant | Description |
-|---|---|
-| TypeInvariant | All variables remain within their declared types |
-| CoreTendermintInv | Agreement, timestamp validity, external validity, accountability |
-| HybridTendermintInv | FSM consistency, DA receipt consistency, BTC anchor consistency, ZK-Proof consistency |
-| CircuitBreakerSafety | Withdrawals locked if state in {SOVEREIGN, RECOVERING} |
+#### Remove f+1 timeout fast-forward
 
-Properties verified: `HysteresisSafety`, `RefinementSafety` (AbstractConsensus!Safety).
+#### Remove DA receipt consistency
 
-### 10.4 Liveness Verification
+## References
 
-```
-Command : tlc -workers 8 -config mc/server/MC_ServerRefinementLiveness.cfg
-                          mc/server/MC_ServerRefinementLiveness.tla
+1. Al-Bassam, M., Sonnino, A., & Buterin, V. (2019). *LazyLedger: A Distributed Data Availability Ledger with Client-Side Validation*. arXiv.  
+   https://arxiv.org/abs/1905.09274
 
-Started : 2026-04-28 16:11:14
-Finished: 2026-04-28 16:18:04   (6 minutes 52 seconds)
-Platform: Mac OS X 26.2 aarch64, 8 workers, 3641 MB heap
+2. Buchman, E. (2016). *Tendermint: Byzantine Fault Tolerance in the Age of Blockchains* (Ph.D. Dissertation). University of Guelph.  
+   https://atrium.lib.uoguelph.ca/items/6c1ad7d4-7e5c-4f7f-b3d4-3f60d4fda1f5
 
-States generated  : 1,098,891
-Distinct states   : 5,648
-States on queue   : 0
-Search depth      : 10
-Avg. outdegree    : 1  (min 0, max 31, 95th percentile 4)
+3. Honoré, W., Qiu, L., Kim, Y., Shin, J.-Y., Kim, J., & Shao, Z. (2024). *AdoB: Bridging Benign and Byzantine Consensus with Atomic Distributed Objects*. **Proceedings of the ACM on Programming Languages**, 8(OOPSLA1), Article 109, 1–45.  
+   https://doi.org/10.1145/3649826
 
-Fingerprint collision probability:
-  Optimistic estimate : 3.3E-10
-  Actual fingerprints : 2.7E-12
+4. Honoré, W., Shin, J.-Y., Kim, J., & Shao, Z. (2022). *Adore: Atomic Distributed Objects with Certified Reconfiguration*. In **Proceedings of the 43rd ACM SIGPLAN International Conference on Programming Language Design and Implementation (PLDI '22)** (pp. 379–394).  
+   https://doi.org/10.1145/3519939.3523444
 
-Result: Model checking completed. No error has been found.
-```
+5. Lamport, L. (2002). *Specifying Systems: The TLA+ Language and Tools for Hardware and Software Engineers*. Addison-Wesley.  
+   https://lamport.azurewebsites.net/tla/book.html
 
-Temporal properties verified:
+6. Lefort, A., et al. (2024). *LiDO: Linearizable Byzantine Distributed Objects*. In **Proceedings of ACM PODC 2024**.  
+   https://doi.org/10.1145/3656423
 
-| Property | Description |
-|---|---|
-| ServerEventualDecision | At least one correct node eventually decides |
-| ServerFSMLiveness | L1 (circuit breaker), L2 (recovery attempt), L3 (complete recovery) |
-| EventualDecisionUnderGST | Under repeated GST conditions, consensus always terminates |
-| ForcedInclusionLiveness | Queued transactions that are continually proposed are eventually decided |
-| RefinementLiveness | AbstractConsensus!Liveness |
-
-### 10.5 Interpretation
-
-The safety verification explores 37.7 million states to depth 14, covering all reachable combinations of Byzantine message scheduling, adversarial sensor readings (including simultaneous Bitcoin and Celestia failures), and malicious leader behavior (data withholding, censorship). Zero invariant violations were found.
-
-The liveness verification confirms that under weak fairness all three FSM liveness properties hold across 1.1 million states to depth 10. The fingerprint collision probability of 2.7E-12 per state makes the probability of a missed violation negligible.
-
-Together, these results constitute a machine-verified proof that the Engram hybrid protocol correctly refines the LiDO abstract model, and that the inherited LiDO Safety and Liveness theorems apply to the concrete protocol.
+7. Tas, E., et al. (2022). *Babylon: Reusing Bitcoin Mining Power for Proof-of-Stake Security*. arXiv.  
+   https://arxiv.org/abs/2207.08392
 
 
 ## 11. Future Work
@@ -920,7 +1000,7 @@ The current specification verifies an unpipelined Tendermint core. A pipelined v
 The current results use a small-scope hypothesis (4 nodes, $f = 1$). Extending the proof to arbitrary $N$ and $f$ would require inductive invariant techniques or a parametric model checker, and is left for future work.
 
 
-## 12. How to Run the Verification
+## How to Run the Verification
 
 ### Prerequisites
 
@@ -960,46 +1040,3 @@ Expected: approximately 7 minutes, 1.1M states generated, no error found.
 3. Open the Command Palette (`Cmd+Shift+P` on macOS, `Ctrl+Shift+P` on Linux/Windows).
 4. Select `TLA+: Check model with TLC`.
 5. Choose the corresponding `.cfg` file when prompted.
-
-
-## Appendix: File Structure
-
-```
-docs/spec/
-├── README.md
-├── core/
-│   ├── EngramVars.tla                           (shared variable declarations)
-│   ├── EngramConsensus.tla                      (Layer 1: LiDO abstract model)
-│   ├── EngramFSM.tla                            (Layer 3: adaptive FSM and sensors)
-│   ├── EngramTendermint.tla                     (Layer 3: CometBFT protocol engine)
-│   └── EngramServer.tla                         (Layer 2: refinement mapping)
-└── mc/
-    └── server/
-        ├── MC_ServerRefinementSafety.tla
-        ├── MC_ServerRefinementSafety.cfg
-        ├── MC_ServerRefinementLiveness.tla
-        └── MC_ServerRefinementLiveness.cfg
-```
-
-## References
-
-1. Al-Bassam, M., Sonnino, A., & Buterin, V. (2019). *LazyLedger: A Distributed Data Availability Ledger with Client-Side Validation*. arXiv.  
-   https://arxiv.org/abs/1905.09274
-
-2. Buchman, E. (2016). *Tendermint: Byzantine Fault Tolerance in the Age of Blockchains* (Ph.D. Dissertation). University of Guelph.  
-   https://atrium.lib.uoguelph.ca/items/6c1ad7d4-7e5c-4f7f-b3d4-3f60d4fda1f5
-
-3. Honoré, W., Qiu, L., Kim, Y., Shin, J.-Y., Kim, J., & Shao, Z. (2024). *AdoB: Bridging Benign and Byzantine Consensus with Atomic Distributed Objects*. **Proceedings of the ACM on Programming Languages**, 8(OOPSLA1), Article 109, 1–45.  
-   https://doi.org/10.1145/3649826
-
-4. Honoré, W., Shin, J.-Y., Kim, J., & Shao, Z. (2022). *Adore: Atomic Distributed Objects with Certified Reconfiguration*. In **Proceedings of the 43rd ACM SIGPLAN International Conference on Programming Language Design and Implementation (PLDI '22)** (pp. 379–394).  
-   https://doi.org/10.1145/3519939.3523444
-
-5. Lamport, L. (2002). *Specifying Systems: The TLA+ Language and Tools for Hardware and Software Engineers*. Addison-Wesley.  
-   https://lamport.azurewebsites.net/tla/book.html
-
-6. Lefort, A., et al. (2024). *LiDO: Linearizable Byzantine Distributed Objects*. In **Proceedings of ACM PODC 2024**.  
-   https://doi.org/10.1145/3656423
-
-7. Tas, E., et al. (2022). *Babylon: Reusing Bitcoin Mining Power for Proof-of-Stake Security*. arXiv.  
-   https://arxiv.org/abs/2207.08392
