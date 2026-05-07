@@ -76,7 +76,7 @@ IsP2PQualityHealthy ==
 da_gap == h_engram_current - h_engram_verified
 
 \* DA layer is publishing proofs within the allowed gap
-IsDAHealthy == (da_gap < DA_THRESHOLD) /\ ~is_das_failed
+IsDAHealthy == (da_gap < DA_THRESHOLD) /\ ~is_das_failed /\ ~is_attestation_failed
 
 
 (* ======================== BTC FINALITY GAP SENSOR ========================= *)
@@ -136,20 +136,27 @@ SanityCheck == state /= "RECOVERING"
 (* ======================== STATE MACHINE INITIALIZATION ================================== *)
 FSMInit == 
     /\ state = "ANCHORED"
+    
     /\ h_btc_current = 0
     /\ h_btc_submitted = 0
     /\ h_btc_anchored = 0
+    /\ is_btc_spv_failed = FALSE
+    
     /\ h_engram_current = 0
     /\ h_engram_verified = 0
+    /\ is_attestation_failed = FALSE
     /\ is_das_failed = FALSE
+    
     /\ anchor_peers = {"anchor_n1", "anchor_n2", "anchor_n3"}
     /\ active_peers = anchor_peers
     /\ blacklisted_peers = {}
-    /\ peer_churn_rate = 0 /\ avg_peer_tenure = MIN_AVG_TENURE /\ peer_latency = 0
+    /\ peer_churn_rate = 0 
+    /\ avg_peer_tenure = MIN_AVG_TENURE 
+    /\ peer_latency = 0
+    
     /\ safe_blocks = 0
-    /\ reanchoring_proof_valid = FALSE
     /\ suspicious_duration = 0
-
+    /\ reanchoring_proof_valid = FALSE
 
 
 (* ======================== ENVIRONMENT SENSOR UPDATE ======================= *)
@@ -158,6 +165,10 @@ UpdateBTCSensor ==
     /\ h_btc_current'   \in {h_btc_current,   h_btc_current + 1}
     /\ h_btc_submitted' \in {h_btc_submitted, h_btc_current'}
     /\ h_btc_anchored'  \in {h_btc_anchored,  h_btc_submitted'}
+    /\ is_btc_spv_failed' \in BOOLEAN
+    /\ h_btc_anchored' \in { IF ~is_btc_spv_failed'
+                              THEN h_btc_submitted'   \* SPV passed: anchor can advance
+                              ELSE h_btc_anchored }   \* SPV failed: anchor frozen
     /\ UNCHANGED <<state, safe_blocks, suspicious_duration, reanchoring_proof_valid>>
     /\ UNCHANGED <<daSensorVars, p2pSensorVars>>
 
@@ -165,7 +176,11 @@ UpdateBTCSensor ==
 UpdateDASensor == 
     /\ h_engram_current' \in {h_engram_current, h_engram_current + 1}
     /\ h_engram_verified' \in {h_engram_verified, h_engram_current'}
+    /\ is_attestation_failed' \in BOOLEAN 
     /\ is_das_failed' \in BOOLEAN
+    /\ h_engram_verified' \in { IF ~is_attestation_failed'
+                                THEN h_engram_verified'     \* DA attestion passed: published confirmation
+                                ELSE h_engram_verified}     \* DA attestion failed: not published confirmation
     /\ UNCHANGED <<state, safe_blocks, suspicious_duration>>
     /\ UNCHANGED <<btcSensorVars, p2pSensorVars>>
 

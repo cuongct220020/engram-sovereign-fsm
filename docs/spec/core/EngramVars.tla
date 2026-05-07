@@ -88,19 +88,21 @@ p2pSensorVars ==
 
 (* ======================== DA SENSOR ======================================== *)
 VARIABLES 
-    h_engram_current,        \* Latest Engram chain block height
-    h_engram_verified,       \* Last DA-verified Engram block height
-    is_das_failed            \* DAS failure flag from Blobstream
+    h_engram_current,           \* Latest Engram chain block height
+    h_engram_verified,          \* Last DA-verified Engram block height
+    is_attestation_failed,      \* DA attestation failure flag from Blobstream
+    is_das_failed               \* Data availability sampling failure flag
 
-daSensorVars == <<h_engram_current, h_engram_verified, is_das_failed>>
+daSensorVars == <<h_engram_current, h_engram_verified, is_attestation_failed, is_das_failed>>
 
 (* ======================== BTC FINALITY GAP SENSOR ========================== *)
 VARIABLES
-    h_btc_current,           \* Latest observed Bitcoin block height
-    h_btc_submitted,         \* Height at which the ZK re-anchoring proof was submitted
-    h_btc_anchored           \* Last confirmed Engram checkpoint height on Bitcoin
+    h_btc_current,              \* Latest observed Bitcoin block height
+    h_btc_submitted,            \* Height at which the ZK re-anchoring proof was submitted
+    h_btc_anchored,             \* Last confirmed Engram checkpoint height on Bitcoin
+    is_btc_spv_failed           \* OP_RETURN inclusion check & Block header verification failure flag
 
-btcSensorVars == <<h_btc_current, h_btc_submitted, h_btc_anchored>>
+btcSensorVars == <<h_btc_current, h_btc_submitted, h_btc_anchored, is_btc_spv_failed>>
 
 
 (* ======================== FSM VARIABLES ====================== *)
