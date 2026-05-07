@@ -229,9 +229,13 @@ ServerNext ==
     \/ ServerAdvanceRealTime
     \/ /\ SynchronizedLocalClocks
        /\ \E p \in Corr : ServerMessageProcessing(p)
+    
     \/ /\ UpdateSensors
-       /\ UNCHANGED <<coreVars, temporalVars, invariantVars, bookkeepingVars, censorVars>>
-       /\ UNCHANGED <<action, qcs, tcs>>
+       /\ UNCHANGED <<coreVars, temporalVars, invariantVars, censorVars>>
+       /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout>>
+       /\ UNCHANGED <<evidence, received_timely_proposal, inspected_proposal>>
+       /\ UNCHANGED <<qcs, tcs>>
+       /\ action' = "UpdateSensors"
     \/ ServerByzantineDataWithholding
 
 ServerSpec == ServerInit /\ [][ServerNext]_serverVars

@@ -173,15 +173,16 @@ BTCNormalUpdate ==
     /\ UNCHANGED <<daSensorVars, p2pSensorVars>>
 
 \* Scenario 2: SPV fails or is under attack; the anchor is throttled (frozen).
-ActionBTCSPVFailure ==
+BTCSPVFailure ==
     /\ h_btc_current' \in {h_btc_current, h_btc_current + 1}
     /\ h_btc_submitted' \in {h_btc_submitted, h_btc_current'}
     /\ is_btc_spv_failed' = TRUE
     /\ h_btc_anchored' = h_btc_anchored     \* SPV verification failed: anchor is frozen
     /\ UNCHANGED <<state, safe_blocks, suspicious_duration, reanchoring_proof_valid>> 
     /\ UNCHANGED <<daSensorVars, p2pSensorVars>>
+    /\ action' = "BTCSPVFailure"
 
-UpdateBTCSensor == BTCNormalUpdate \/ ActionBTCSPVFailure
+UpdateBTCSensor == BTCNormalUpdate \/ BTCSPVFailure
 
 
 \* ------------------- 2. DATA AVAILABILITY SENSOR -------------------
@@ -196,7 +197,7 @@ DANormalUpdate ==
     /\ UNCHANGED <<btcSensorVars, p2pSensorVars>>
 
 \* Scenario 2: DA Layer reports failure (Data Withholding attack or Blobstream disconnect).
-ActionDAFailure ==
+DAFailure ==
     /\ h_engram_current' \in {h_engram_current, h_engram_current + 1}
     /\ is_attestation_failed' \in BOOLEAN
     /\ is_das_failed' \in BOOLEAN
@@ -205,8 +206,9 @@ ActionDAFailure ==
     /\ h_engram_verified' = h_engram_verified \* DA failure: verification is throttled (frozen)
     /\ UNCHANGED <<state, safe_blocks, suspicious_duration>> 
     /\ UNCHANGED <<btcSensorVars, p2pSensorVars>>
+    /\ action' = "DAFailure"
 
-UpdateDASensor == DANormalUpdate \/ ActionDAFailure
+UpdateDASensor == DANormalUpdate \/ DAFailure
 
 \* ------------------- 3. P2P HEALTH SENSOR -------------------
 
@@ -222,32 +224,36 @@ P2PNormalUpdate ==
 \* Attack Scenario 1: Relay-node latency injection
 \* The adversary inserts a proxy/relay node into the routing path to intercept messages.
 \* This physically forces the peer latency to spike beyond the acceptable threshold.
-ActionRelayNodeAttack == 
+RelayNodeAttack == 
     /\ peer_latency' = MAX_PEER_LATENCY + 10  
-    /\ UNCHANGED <<active_peers, peer_churn_rate, avg_peer_tenure>> 
+    /\ UNCHANGED <<active_peers, peer_churn_rate, avg_peer_tenure>>
+    /\ action' = "RelayNodeAttack"
+
 
 
 \* Attack Scenario 2: BGP Hijacking / Connection Hijacking
 \* The adversary manipulates BGP routes to isolate the victim at the infrastructure level.
 \* The victim's active peer set is entirely replaced by Sybil nodes from a single ASN/subnet.
-ActionBGPHijacking == 
+BGPHijackingAttack == 
     /\ active_peers' = {"sybil_n1", "sybil_n2", "sybil_n3"} 
     /\ UNCHANGED <<peer_latency, peer_churn_rate, avg_peer_tenure>>
+    /\ action' = "BGPHijackingAttack"
 
 
 \* Attack Scenario 3: Churn-based IP rotation (Dynamic Peer Replacement)
 \* The adversary continuously rotates malicious IP addresses to evade static firewalls.
 \* This triggers a high network churn rate and reduces the average peer tenure to zero.
-ActionChurnBasedRotation == 
+ChurnBasedRotationAttack == 
     /\ peer_churn_rate' = MAX_CHURN_RATE + 5  
     /\ avg_peer_tenure' = 0                   
     /\ UNCHANGED <<active_peers, peer_latency>>
+    /\ action' = "ChurnBasedRotationAttack"
 
 \* TODO: Add attack audit log for TLC trace log
 P2PAdversaryAttack ==         
-    \/ ActionRelayNodeAttack 
-    \/ ActionBGPHijacking 
-    \/ ActionChurnBasedRotation
+    \/ RelayNodeAttack 
+    \/ BGPHijackingAttack
+    \/ ChurnBasedRotationAttack
 
 \* P2PAdversaryAttack ==
 \*     \* ADVERSARY EXPLOITS THE "WEAKEST LINK" (DEFENSE-IN-DEPTH TEST)

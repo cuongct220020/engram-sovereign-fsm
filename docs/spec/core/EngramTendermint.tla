@@ -851,14 +851,19 @@ ByzantineDataWithholding ==
             /\ UNCHANGED <<coreVars, temporalVars, fsmVars, invariantVars, censorVars>>
             /\ UNCHANGED <<msgs_prevote, msgs_precommit, msgs_timeout>>
             /\ UNCHANGED <<evidence, action, received_timely_proposal, inspected_proposal>>
+            /\ action' = "ByzantineDataWithholding"
+
 
 
 \* Censorship Resistance: injects a new transaction into the forced inclusion queue
 SubmitToCelestiaDA ==
     \E tx \in ValidValues \ forced_tx_queue :
         /\ forced_tx_queue' = forced_tx_queue \union {tx}
-        /\ UNCHANGED <<coreVars, temporalVars, bookkeepingVars, invariantVars, fsmVars>>
+        /\ UNCHANGED <<coreVars, temporalVars, invariantVars, fsmVars>>
+        /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout>>
+        /\ UNCHANGED <<evidence, received_timely_proposal, inspected_proposal>>
         /\ UNCHANGED <<tx_ignored_rounds>>
+        /\ action' = "SubmitToCelestiaDA"
 
 
 (* ======================== NEXT-STATE RELATION ============================= *)
