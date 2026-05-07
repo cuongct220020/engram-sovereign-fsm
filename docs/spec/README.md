@@ -29,7 +29,7 @@
       - [Healthy Condition](#healthy-condition)
     - [5.2 State Transition Logic](#52-state-transition-logic)
       - [Transition Definitions](#transition-definitions)
-      - [Re-anchoring via Recursive ZK-Proof](#re-anchoring-via-recursive-zk-proof)
+      - [Re-anchoring via ZK-Proof of Recovery](#re-anchoring-via-zk-proof-of-recovery)
       - [Hysteresis Mechanism](#hysteresis-mechanism)
   - [7. Consensus Protocol: Hybrid Adaptive Tendermint with Extended Proposal](#7-consensus-protocol-hybrid-adaptive-tendermint-with-extended-proposal)
   - [8. Security and Safety Analysis](#8-security-and-safety-analysis)
@@ -268,6 +268,30 @@ $$\Delta H_{\text{BTC}} = H_{\text{current}} - \min(H_{\text{submitted}},\, H_{\
 
 The formula uses $\min(H_{\text{submitted}}, H_{\text{anchored}})$ as the baseline so that a submitted-but-unconfirmed checkpoint is counted toward the gap.
 
+#### Bitcoin SPV Verification
+
+The gap formula measures *delay*, but cannot detect *forged* checkpoint data. An eclipsed node receiving a fabricated `btc_receipt` from a Byzantine leader would see a plausible height value while the underlying checkpoint is invalid. To close this gap, each validator performs two off-band checks independently of the consensus pipeline, using Babylon's BTC Light Client and BTC Checkpoint modules:
+
+1. **OP_RETURN Inclusion Check**: verify via Merkle proof that the Engram checkpoint transaction is included in the claimed Bitcoin block.
+2. **Block Header Verification**: hash the block header to confirm `checkpoint_block_hash` matches the canonical chain maintained by the local SPV client.
+
+The combined result is stored as a single boolean `is_btc_spv_failed` in local state. Unlike `is_das_failed`, this flag does not directly enter `IsWarningCondition` — because a failed SPV check already prevents `h_btc_anchored` from advancing, causing `btc_gap` to grow and trigger the warning condition naturally. Its primary roles are:
+
+- **Integrity guard on `h_btc_anchored`**: the anchor height only advances when `is_btc_spv_failed = FALSE`, preventing a forged checkpoint from being counted as confirmed.
+- **Proposal validation**: `VerifySPVProof(btc_receipt)` in `IsValidProposal` cross-checks the leader's claimed `checkpoint_block_hash` against the locally cached canonical hash, rejecting Eclipse-forged Bitcoin branches before they enter the voting phase.
+
+```tlaplus
+\* h_btc_anchored only advances when SPV verification passes
+UpdateBTCSensor == 
+    /\ is_btc_spv_failed' \in BOOLEAN
+    /\ h_btc_anchored' \in { IF ~is_btc_spv_failed'
+                              THEN h_btc_submitted'   \* SPV passed: anchor can advance
+                              ELSE h_btc_anchored }   \* SPV failed: anchor frozen
+    /\ ...
+```
+
+This design is intentionally asymmetric with `is_das_failed`: DA sampling is a detection signal that must surface immediately as a warning, whereas SPV failure is an integrity constraint whose effect propagates through the gap metric.
+
 ### 4.2 Data Availability Gap Sensor
 
 This sensor measures the lag between the current Engram chain head and the last block for which a verified DA commitment receipt has been received from Celestia via Blobstream.
@@ -364,67 +388,102 @@ All transitions require greater than 2/3 quorum agreement through the consensus 
 
 * **From ANCHORED:**
 
-  ```tlaplus
-  AnchoredToSuspicious == 
-      /\ state = ANCHORED 
-      /\ IsWarningCondition 
-      /\ ~IsCriticalCondition
+```tlaplus
+AnchoredToSuspicious == 
+    /\ state = ANCHORED 
+    /\ IsWarningCondition 
+    /\ ~IsCriticalCondition
 
-  AnchoredToSovereign == 
-      /\ state = ANCHORED 
-      /\ IsCriticalCondition
-  ```
+AnchoredToSovereign == 
+    /\ state = ANCHORED 
+    /\ IsCriticalCondition
+```
 
 * **From SUSPICIOUS:**
 
-  ```tlaplus
-  SuspiciousToAnchored == 
-      /\ state = SUSPICIOUS 
-      /\ IsHealthyCondition
+```tlaplus
+SuspiciousToAnchored == 
+    /\ state = SUSPICIOUS 
+    /\ IsHealthyCondition
 
-  SuspiciousToSovereign == 
-      /\ state = SUSPICIOUS 
-      /\ IsCriticalCondition
-  ```
+SuspiciousToSovereign == 
+    /\ state = SUSPICIOUS 
+    /\ IsCriticalCondition
+```
 
 Note that `suspicious_duration` is incremented each block the system remains in `SUSPICIOUS` and reset to zero upon any state change. This counter feeds into `IsCriticalCondition` via the $\tau_{\text{max}}$ clause.
 
 * **From SOVEREIGN:**
 
-  ```tlaplus
-  SovereignToRecovering == 
-      /\ state = SOVEREIGN 
-      /\ IsHealthyCondition
-  ```
+```tlaplus
+SovereignToRecovering == 
+    /\ state = SOVEREIGN 
+    /\ IsHealthyCondition
+```
 
 * **From RECOVERING:**
 
-  ```tlaplus
-  RecoveringProgress == 
-      /\ state = RECOVERING 
-      /\ IsHealthyCondition 
-      /\ safe_blocks < HYSTERESIS_WAIT
+```tlaplus
+RecoveringProgress == 
+    /\ state = RECOVERING 
+    /\ IsHealthyCondition 
+    /\ safe_blocks < HYSTERESIS_WAIT
 
-  RecoveringToAnchored == 
-      /\ state = RECOVERING
-      /\ IsHealthyCondition 
-      /\ safe_blocks = HYSTERESIS_WAIT 
-      /\ PI_RA = TRUE
+RecoveringToAnchored == 
+    /\ state = RECOVERING
+    /\ IsHealthyCondition 
+    /\ safe_blocks = HYSTERESIS_WAIT 
+    /\ PI_RA = TRUE
 
-  RecoveringToSovereign == 
-      /\ state = RECOVERING 
-      /\ IsCriticalCondition
-  ````
+RecoveringToSovereign == 
+    /\ state = RECOVERING 
+    /\ IsCriticalCondition
+```
 
-#### Re-anchoring via Recursive ZK-Proof
+#### Re-anchoring via ZK-Proof of Recovery
 
-Blocks produced in SOVEREIGN mode are secured only by local PoS and are not yet Bitcoin-anchored. To restore Bitcoin-grade finality, these blocks must be reconciled with the Bitcoin-anchored history without requiring re-execution of each sovereign block individually.
+Blocks produced in `SOVEREIGN` mode are secured only by local PoS and lack Bitcoin-anchored finality. To safely restore connectivity and return to `ANCHORED`, the system must reconcile these sovereign blocks with the Bitcoin-anchored history. 
 
-Let $S_{\text{last}}$ be the last Bitcoin-anchored state and $\Delta_1, \dots, \Delta_n$ be the sequence of sovereign state transitions. The re-anchoring proof $\pi_{\text{RA}}$ must satisfy:
+Crucially, the objective of the re-anchoring circuit is **not** to prove the correct execution of all state transitions (Proof of Execution), which would require a massive zkVM-like arithmetization. Instead, it is designed as a **Proof of Recovery**. The circuit strictly proves that the sequence of sovereign blocks maintained continuity and adhered to the FSM recovery policies (e.g., locking withdrawals). 
 
-$$V(S_{\text{last}},\, S_{\text{new}},\, \pi_{\text{RA}}) = 1, \quad\text{where}\; S_{\text{new}} = S_{\text{last}} + \sum_{i=1}^{n} \Delta_i$$
+This fundamental scoping minimizes the arithmetization size and constraint count, keeping the prover cost practically low while maintaining an $O(1)$ verification time and minimal proof size suitable for on-chain or off-chain DA validation.
 
-A single recursive SNARK (Plonk proving system, Poseidon2 hash) aggregates all sovereign transitions into one constant-size proof, allowing $O(1)$ verification on the settlement layer regardless of the number of sovereign blocks produced.
+* **Cryptographic Assumptions**
+
+The re-anchoring proof relies on standard cryptographic assumptions:
+  * **Random Oracle Model (ROM):** The cryptographic hash function (Poseidon2) is modeled as a random oracle to ensure collision resistance within the circuit.
+  * **Knowledge Soundness:** There exists a polynomial-time extractor such that if a prover can produce a valid proof $\pi_{RA}$, they must possess the valid underlying witness $w$.
+
+* **2. Re-anchoring Relation and Predicate**
+
+We formally define the re-anchoring relation $\mathcal{R}_{RA}$ to separate public inputs $x$ from the private witness $w$. Rather than proving complex transaction bodies, the witness $w$ consists solely of the sequence of lightweight block headers generated during the disconnection.
+
+Let $rt_{last}$ be the state root of the last Bitcoin-anchored block, and $rt_{new}$ be the state root of the proposed recovered block. 
+
+$$x = (rt_{last}, rt_{new}, n)$$
+$$w = (H_{k+1}, H_{k+2}, \dots, H_{k+n})$$
+
+The Zero-Knowledge predicate $\Phi_{Recovery}(x, w) = 1$ is satisfied if and only if the following strict conditions hold:
+
+$$
+\Phi_{Recovery}(x, w) = 1 \iff 
+\begin{cases} 
+(1) & \forall i \in [n-1]:\ H_{k+i+1}.\text{prev\_hash} = \text{Poseidon2}(H_{k+i}) \\ 
+(2) & \forall i \in [n]:\ H_{k+i}.\text{fsm\_state} \in \{\texttt{SOVEREIGN}, \texttt{RECOVERING}\} \\ 
+(3) & \forall i \in [n]:\ H_{k+i}.\text{withdrawal\_locked} = \text{true} \\ 
+(4) & H_{k+1}.\text{old\_state\_root} = rt_{last} \land H_{k+n}.\text{new\_state\_root} = rt_{new} 
+\end{cases}
+$$
+
+* **3. Circuit Guarantees**
+
+By verifying $\Phi_{Recovery}(x, w) = 1$, the verifier $V(x, \pi_{RA})$ mathematically guarantees four core system invariants without re-executing a single transaction:
+  * **Condition (1) - Continuity:** Ensures the historical hash-chain is unbroken and no adversarial blocks were injected or reordered.
+  * **Condition (2) - Policy Adherence:** Ensures the system strictly followed the FSM transition rules, blocking any illegal jumps to `ANCHORED`.
+  * **Condition (3) - Economic Circuit Breaker:** Guarantees that absolutely no cross-chain withdrawals were permitted during the period of reduced security, completely mitigating double-spending extraction risks.
+  * **Condition (4) - State Consistency:** Cryptographically anchors the new Merkle state root to the validated unbroken header chain.
+
+By restricting the circuit to header verification and boolean flag checks, the constraint count remains highly optimized. A single proof (utilizing Noir with an UltraPlonk/Honk backend) aggregates the entire sovereign history into a constant-size proof, yielding negligible overhead on the critical consensus path.
 
 #### Hysteresis Mechanism
 
