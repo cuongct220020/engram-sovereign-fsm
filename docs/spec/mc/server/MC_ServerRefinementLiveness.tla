@@ -4,17 +4,11 @@
  *
  * Runs TLC to verify LIVENESS properties of the concrete EngramServer spec
  * against the abstract EngramConsensus (LiDO) spec via EngramRefinement.
- *
- * Run separately from MC_ServerRefinementSafety because:
- *   - Liveness requires a SPECIFICATION (Init ∧ [][Next] ∧ Fairness)
- *   - Smaller bounds (MaxRound = 2) needed — fairness checking is expensive
- *   - MC_Server_Fairness defines the WF conditions for progress
- *
- * Corresponding config: MC_ServerRefinementLiveness.cfg
  *)
-EXTENDS EngramServer, EngramRefinement, TLC, Sequences
+EXTENDS EngramServer, EngramServerRefinement, TLC, Sequences
 
 CONSTANTS n1, n2, n3, n4
+\* CONSTANTS n1, n2, n3, n4, n5, n6, n7
 
 ASSUME QuorumOverlap
 
@@ -25,12 +19,19 @@ MC_Method == {"TX_NORMAL", "TX_WITHDRAWAL"}
 MC_Faulty == {n4}
 MC_Corr   == MC_Nodes \ MC_Faulty
 
+\* MC_Nodes == {n1, n2, n3, n4, n5, n6, n7}
+\* MC_Method == {"TX_NORMAL", "TX_WITHDRAWAL"}
+\* MC_Faulty == {n6, n7}
+\* MC_Corr   == MC_Nodes \ MC_Faulty
 
 (* ======================== ROTATIONAL LEADER SCHEDULE ===================== *)
 \* Round-robin proposer: node at position (r mod 4) + 1 in the sequence
 MC_NodeSeq  == <<n1, n2, n3, n4>>
 MC_Proposer == [r \in 0..5 |-> MC_NodeSeq[(r % 4) + 1]]
 
+\* \* Round-robin proposer: node at position (r mod 7) + 1 in the sequence
+\* MC_NodeSeq == <<n1, n2, n3, n4, n5, n6, n7>>
+\* MC_Proposer == [r \in 0..10 |-> MC_NodeSeq[(r % 7) + 1]]
 
 (* ======================== INIT & NEXT ==================================== *)
 MC_ServerInit == ServerInit

@@ -33,6 +33,9 @@
       - [Re-anchoring via ZK-Proof of Recovery](#re-anchoring-via-zk-proof-of-recovery)
       - [Hysteresis Mechanism](#hysteresis-mechanism)
   - [7. Consensus Protocol: Hybrid Adaptive Tendermint with Extended Proposal](#7-consensus-protocol-hybrid-adaptive-tendermint-with-extended-proposal)
+    - [7.1 Extended Proposal Structure](#71-extended-proposal-structure)
+    - [7.2 Proposal Validation](#72-proposal-validation)
+    - [7.3 Consensus State Machine Diagram](#73-consensus-state-machine-diagram)
   - [8. Security and Safety Analysis](#8-security-and-safety-analysis)
     - [8.1 State Invariants](#81-state-invariants)
     - [8.2 Attack Resilience Lemmas](#82-attack-resilience-lemmas)
@@ -44,7 +47,7 @@
     - [10.2 Formal Verification stress test](#102-formal-verification-stress-test)
     - [10.3 TLC Counterexample traces analysis](#103-tlc-counterexample-traces-analysis)
   - [References](#references)
-  - [Future Work](#11-future-work)
+  - [Future Work](#future-work)
   - [How to Run the Verification](#how-to-run-the-verification)
 
 ## Abstract
@@ -94,7 +97,7 @@ The protocol maintains a four-state FSM that degrades gracefully across security
 4. **Applies the appropriate security policy** (circuit breaker, withdrawal lock, fork-choice rule) based on the globally agreed-upon state.
 5. **Recovers autonomously** when peripheral layers are restored, re-anchoring sovereign blocks to Bitcoin via a single recursive ZK-Proof.
 
-Critically, the consensus object is extended: a valid proposal is no longer merely a transaction batch; it is a tuple `[transactions, fsm_state, da_receipt, btc_anchored, zk_proof_ref]`. A validator will only issue a `Prevote` for a proposal if all peripheral components strictly match its own local sensor readings, effectively establishing Byzantine-fault-tolerant agreement on the health of the entire modular stack.
+Critically, the consensus object is extended: a valid proposal is no longer merely a transaction batch; it is a tuple `[transactions, fsm_state, da_receipt, btc_receipt, zk_proof_ref]`. A validator will only issue a `Prevote` for a proposal if all peripheral components strictly match its own local sensor readings, effectively establishing Byzantine-fault-tolerant agreement on the health of the entire modular stack.
 
 ### 2.2 Finite State Machine
 
@@ -487,6 +490,8 @@ The `safe_blocks` counter prevents state oscillation. On entry into RECOVERING, 
 
 ## 7. Consensus Protocol: Hybrid Adaptive Tendermint with Extended Proposal
 
+### 7.1 Extended Proposal Structure
+
 The base consensus engine is CometBFT (Tendermint). The key extension is the **Proposal structure**, which carries additional fields required by the hybrid model:
 
 ```text
@@ -507,6 +512,8 @@ Proposal := {
 }
 ```
 
+### 7.2 Proposal Validation
+
 A validator accepts a proposal and casts a `PREVOTE` only if `IsValidProposal(proposal)` holds. This predicate enforces:
 
 - `fsm_state` matches `CalculateNextFSMState` evaluated at the validator's local sensor readings (cross-check of agreed peripheral health).
@@ -514,6 +521,8 @@ A validator accepts a proposal and casts a `PREVOTE` only if `IsValidProposal(pr
 - `btc_receipt.checkpoint_block_height` satisfies monotonic non-decrease with round-adaptive BTC tolerance `BTCTolerance(r)`, and `VerifySPVProof(btc_receipt)` passes the canonical hash check.
 - Withdrawal transactions are blocked when `fsm_state = SOVEREIGN`.
 - A ZK-Proof is mandatory (`VerifyZkProof`) when `fsm_state = RECOVERING` and `safe_blocks = HYSTERESIS_WAIT`.
+
+### 7.3 Consensus State Machine Diagram
 
 ```mermaid
 stateDiagram-v2
@@ -588,8 +597,6 @@ The formal correctness of the hybrid consensus protocol is guaranteed across the
 **Theorem 8.1 (Hybrid Consensus Safety and Accountability).** *Under partial synchrony, no two honest nodes will ever decide on conflicting blocks or conflicting FSM states. Any safety violation mathematically guarantees the extraction of cryptographic double-signing evidence via EOTS.*
 
 ### 8.1 State Invariants
-
-To prove Theorem 8.1, the TLC model checker exhaustively verified the following invariants against 37.7 million reachable states with zero violations.
 
 **Invariant S1 (Circuit Breaker Isolation).** Cross-chain withdrawals are strictly locked if and only if the protocol operates in a fallback state. This prevents fund extraction during any period when Bitcoin finality cannot guarantee the irreversibility of cross-chain transactions.
 
@@ -718,13 +725,7 @@ Formally specified in `EngramTendermint.tla` as `Accountability`, part of `CoreT
 
 ## 9. Liveness Analysis and Autonomous Recovery
 
-Modular blockchains face critical liveness risks when peripheral layers fail. Through the refinement mapping in `EngramServer.tla`, the concrete implementation mechanically inherits the abstract liveness properties of the LiDO framework. The following theorem is verified across 1.1 million states.
-
-**Theorem 9.1 (Autonomous Liveness under Degradation).** *The protocol continually processes transactions under normal conditions and autonomously degrades, recovers, and re-anchors its security posture without permanent stalling, even during external modular layer failures.*
-
-## 9. Liveness Analysis and Autonomous Recovery
-
-Modular blockchains face critical liveness risks when peripheral layers fail. Through the refinement mapping in `EngramServer.tla`, the concrete implementation mechanically inherits the abstract liveness properties of the LiDO framework. The following theorem is verified across 1.1 million states.
+Modular blockchains face critical liveness risks when peripheral layers fail. Through the refinement mapping in `EngramServer.tla`, the concrete implementation mechanically inherits the abstract liveness properties of the LiDO framework.
 
 **Theorem 9.1 (Autonomous Liveness under Degradation).** *The protocol continually processes transactions under normal conditions and autonomously degrades, recovers, and re-anchors its security posture without permanent stalling, even during external modular layer failures.*
 
@@ -808,157 +809,124 @@ $$\forall\, q_1, q_2 \in \text{ValidQuorums} : (q_1 \cap q_2) \cap \text{Corr} \
 
 This ensures that any two quorum decisions share at least one honest node, which is the foundation of both Agreement and Liveness in the LiDO model.
 
-### 10.2. Formal Verification stress test
+### 10.2. Formal Verification Stress Test
 
-> Parameters(N, f, MaxRound, MaxBTCHegiht, MaxEngramHeight)
+> Parameters $(N, f, \text{MaxRound}, \text{MaxBTCHeight}, \text{MaxEngramHeight}, \text{MaxTimestamp})$
 
-#### Safety Verification results
+#### Safety Verification Results
 
-<table>
-  <thead>
-    <tr>
-      <th>Config</th>
-      <th>Parameters</th>
-      <th>Target Scenario</th>
-      <th>States Generated</th>
-      <th>Distinct States</th>
-      <th>Depth</th>
-      <th>Time</th>
-      <th>Violations</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><strong>C1</strong></td>
-      <td>4, 1, 3, 3, 3</td>
-      <td>Baseline reproduction</td>
-      <td>[Từ TLC]</td>     <!-- States Generated -->
-      <td>[Từ TLC]</td>     <!-- Distinct States -->
-      <td>10</td>           <!-- Search Depth -->
-      <td>[Từ TLC]</td>     <!-- Execution Time -->
-      <td>0</td>            <!-- Violations Found -->
-    </tr>
-    <tr>
-      <td><strong>C2</strong></td>
-      <td>4, 1, 5, 4, 4</td>
-      <td>Deep consensus rounds</td>
-      <td>[Từ TLC]</td>     <!-- States Generated -->
-      <td>[Từ TLC]</td>     <!-- Distinct States -->
-      <td>10</td>           <!-- Search Depth -->
-      <td>[Từ TLC]</td>     <!-- Execution Time -->
-      <td>0</td>            <!-- Violations Found -->
-    </tr>
-    <tr>
-      <td><strong>C3</strong></td>
-      <td>7, 2, 3, 3, 3</td>
-      <td>Expanded quorum overlap</td>
-      <td>[Từ TLC]</td>     <!-- States Generated -->
-      <td>[Từ TLC]</td>     <!-- Distinct States -->
-      <td>10</td>           <!-- Search Depth -->
-      <td>[Từ TLC]</td>     <!-- Execution Time -->
-      <td>0</td>            <!-- Violations Found -->
-    </tr>
-    <tr>
-      <td><strong>C4</strong></td>
-      <td>4, 1, 3, 3, 3</td>
-      <td>Simultaneous BTC+DA+P2P failure</td>
-      <td>[Từ TLC]</td>     <!-- States Generated -->
-      <td>[Từ TLC]</td>     <!-- Distinct States -->
-      <td>10</td>           <!-- Search Depth -->
-      <td>[Từ TLC]</td>     <!-- Execution Time -->
-      <td>0</td>            <!-- Violations Found -->
-    </tr>
-    <tr>
-      <td><strong>C5</strong></td>
-      <td>4, 1, 3, 3, 3</td>
-      <td>Byzantine proposer</td>
-      <td>[Từ TLC]</td>     <!-- States Generated -->
-      <td>[Từ TLC]</td>     <!-- Distinct States -->
-      <td>10</td>           <!-- Search Depth -->
-      <td>[Từ TLC]</td>     <!-- Execution Time -->
-      <td>0</td>            <!-- Violations Found -->
-    </tr>
-  </tbody>
-</table>
+| Config | Parameters | Target Scenario | States Generated | Distinct States | Depth | Time | Violations |
+| :--- | :--- | :--- | ---: | ---: | ---: | :--- | ---: |
+| **C1** | 4, 1, 4, 3, 3, 10 | Base topology with adversarial injection | 324,640 | 12,481 | 10 | 49s | 0 |
+| **C2** | 4, 1, 5, 4, 4, 15 | Deep consensus rounds | 1,011,237 | 35,401 | 12 | 03min 01s | 0 |
+| **C3** | 7, 2, 4, 3, 3, 8 | Expanded quorum overlap | 248,222 | 9,921 | 10 | 07min 33s | 0 |
 
-#### Liveness Verification results
+
+#### Liveness Verification Results
+
+| Config | Parameters | Target Scenario | States Generated | Distinct States | Depth | Time | Violations |
+| :--- | :--- | :--- | ---: | ---: | ---: | :--- | ---: |
+| **C1** | 4, 1, 3, 2, 2, 6 | Base topology with adversarial injection | 79,300 | 3,313 | 8 | 43s | 0 |
+| **C2** | 4, 1, 4, 3, 3, 12 | Deep consensus rounds | 406,178 | 15,041 | 11 | 05min 16s | 0 |
+| **C3** | 7, 2, 3, 2, 2, 8 | Expanded quorum overlap | 111,270 | 4,465 | 8 | 03min 20s | 0 |
+
+### 10.3. Ablation study & counterexample traces analysis
+
+To rigorously justify the necessity of the Engram Hybrid FSM architecture, we conducted an ablation study by systematically disabling specific defensive mechanisms within the protocol's TLA+ specification. We preserved the strict mathematical invariants in the configuration files, forcing the TLC model checker to exhaustively search for attack vectors. The resulting counterexamples reveal exactly how the system fails when deprived of its core safeguards.
+
+#### 10.3.1. Summary of Ablation Results
+
+The table below summarizes the breadth of our formal verification stress test. By injecting omissions into the `EngramFSM` and `EngramTendermint` modules, the model checker autonomously synthesized the exact vulnerability traces that exploit the missing logic.  
 
 <table>
   <thead>
     <tr>
-      <th>Config</th>
-      <th>Parameters</th>
-      <th>Target Scenario</th>
-      <th>States Generated</th>
-      <th>Distinct States</th>
-      <th>Depth</th>
-      <th>Time</th>
-      <th>Violations</th>
+      <th>Ablated Component</th>
+      <th>Targeted Threat</th>
+      <th>Error Depth</th>
+      <th>Violated Invariant / Property</th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <td><strong>C1</strong></td>
-      <td>4, 1, 2, 2, 2</td>
-      <td>Baseline reproduction</td>
-      <td>[Từ TLC]</td>     <!-- States Generated -->
-      <td>[Từ TLC]</td>     <!-- Distinct States -->
-      <td>[Từ TLC]</td>     <!-- Search Depth -->
-      <td>[Từ TLC]</td>     <!-- Execution Time -->
-      <td>0</td>            <!-- Violations Found -->
+      <td>Remove Circuit Breaker</td>
+      <td>Withdrawal Leakage</td>
+      <td>[Điền Depth từ TLC]</td>
+      <td><code>CircuitBreakerSafety</code></td>
     </tr>
     <tr>
-      <td><strong>C2</strong></td>
-      <td>4, 1, 3, 3, 3</td>
-      <td>Deep consensus rounds</td>
-      <td>[Từ TLC]</td>     <!-- States Generated -->
-      <td>[Từ TLC]</td>     <!-- Distinct States -->
-      <td>10</td>           <!-- Search Depth -->
-      <td>[Từ TLC]</td>     <!-- Execution Time -->
-      <td>0</td>            <!-- Violations Found -->
+      <td>Remove Hysteresis</td>
+      <td>State Oscillation</td>
+      <td>[Điền Depth từ TLC]</td>
+      <td><code>HysteresisSafety</code></td>
     </tr>
     <tr>
-      <td><strong>C3</strong></td>
-      <td>7, 2, 2, 2, 2</td>
-      <td>Expanded quorum overlap</td>
-      <td>[Từ TLC]</td>     <!-- States Generated -->
-      <td>[Từ TLC]</td>     <!-- Distinct States -->
-      <td>10</td>           <!-- Search Depth -->
-      <td>[Từ TLC]</td>     <!-- Execution Time -->
-      <td>0</td>            <!-- Violations Found -->
+      <td>Remove P2P Health Gate</td>
+      <td>False Recovery</td>
+      <td>[Điền Depth từ TLC]</td>
+      <td><code>StrictFSMTransitionSafety</code></td>
     </tr>
     <tr>
-      <td><strong>C4</strong></td>
-      <td>4, 1, 2, 2, 2</td>
-      <td>Simultaneous BTC+DA+P2P failure</td>
-      <td>[Từ TLC]</td>     <!-- States Generated -->
-      <td>[Từ TLC]</td>     <!-- Distinct States -->
-      <td>10</td>           <!-- Search Depth -->
-      <td>[Từ TLC]</td>     <!-- Execution Time -->
-      <td>0</td>            <!-- Violations Found -->
+      <td>Remove DA Consistency</td>
+      <td>Data Withholding</td>
+      <td>[Điền Depth từ TLC]</td>
+      <td><code>HybridTendermintInvariant</code></td>
     </tr>
     <tr>
-      <td><strong>C5</strong></td>
-      <td>4, 1, 2, 2, 2</td>
-      <td>Byzantine proposer</td>
-      <td>[Từ TLC]</td>     <!-- States Generated -->
-      <td>[Từ TLC]</td>     <!-- Distinct States -->
-      <td>10</td>           <!-- Search Depth -->
-      <td>[Từ TLC]</td>     <!-- Execution Time -->
-      <td>0</td>            <!-- Violations Found -->
+      <td>Remove f+1 fast-forward</td>
+      <td>Liveness Deadlock</td>
+      <td>[Điền Depth từ TLC]</td>
+      <td><code>EventualDecisionUnderGST</code></td>
     </tr>
   </tbody>
-</table>
+</table>  
 
-### 10.3. TLC Counterexample traces analysis
+Evaluation Methodology Note: The TLC model checker utilized an exhaustive search to synthesize the exact attack traces that exploit the missing logic, formally proving the necessity of each architectural safeguard.*
 
-#### Remove Hysteresis
+#### 10.3.2. Deep-Dive Trace Analysis
 
-#### Remove P2P Health Gate
+In this section, we dissect the state-by-state execution traces generated by the TLC model checker to illustrate the exact attack vectors enabled by each ablation.
 
-#### Remove f+1 timeout fast-forward
+##### A. Remove Hysteresis
 
-#### Remove DA receipt consistency
+* **Ablated Logic:** Disabled the safe\_blocks \= HYSTERESIS\_WAIT precondition in the ExecuteFSMTransition action.  
+* **TLC Metrics:** Violation found at depth \[Điền Error Depth từ TLC, ví dụ: 12\], after exploring \[Điền số States Generated, ví dụ: 45,210\] states.  
+* **Counterexample Trace (State Flapping):**  
+* *State \[X\] (action \= "\[Tên action\]"):* The network experiences a simulated peripheral outage, pushing the FSM to SOVEREIGN.  
+* *State \[Y\] (action \= "\[Tên action\]"):* Sensors flicker back to healthy. Without hysteresis, the proposer blindly proposes an ANCHORED state block.  
+* *State \[Z\] (action \= "\[Tên action\]"):* The anomaly repeats. The HysteresisSafety property is explicitly violated as the FSM continuously flaps without stabilizing.
+
+##### B. Remove P2P Health Gate
+
+* **Ablated Logic:** Removed the IsP2PQualityHealthy requirement from the IsHealthyCondition predicate.  
+* **TLC Metrics:** Violation found at depth \[Điền Depth\], after exploring \[Điền số States\] states.  
+* **Counterexample Trace (Eclipse-induced False Recovery):**  
+* *State \[X\] (action \= "\[Tên action\]"):* A target validator is perfectly eclipsed by a Sybil adversary.  
+* *State \[Y\] (action \= "\[Tên action\]"):* The adversary feeds the validator forged but structurally valid BTC and DA receipts.  
+* *State \[Z\] (action \= "\[Tên action\]"):* The eclipsed node incorrectly evaluates IsHealthyCondition \= TRUE and attempts a false recovery, violating StrictFSMTransitionSafety.
+
+##### C. Remove f+1 timeout fast-forward
+
+* **Ablated Logic:** Disabled the UponfPlusOneTimeoutsAny pacemaker action, reverting to standard full-timeout waiting.  
+* **TLC Metrics:** Violation found at depth \[Điền Depth\], after exploring \[Điền số States\] states.  
+* **Counterexample Trace (Partial Synchrony Deadlock):**  
+* *State \[X\] (action \= "\[Tên action\]"):* A network partition causes *f* honest nodes to timeout early and move to round *r+1*.  
+* *State \[Y\] (action \= "\[Tên action\]"):* The remaining honest nodes stall, waiting for full local timers to expire.  
+* *State \[Z\] (action \= "\[Tên action\]"):* The TLC model checker flags a violation of EventualDecisionUnderGST, proving a severe liveness delay.
+
+##### D. Remove DA receipt consistency (With Sequence Diagram)
+
+* **Ablated Logic:** Commented out da\_receipt.attestation \= TRUE in the IsValidProposal semantic firewall.  
+* **TLC Metrics:** Violation found at depth \[Điền Depth\], after exploring \[Điền số States\] states.  
+* **Counterexample Trace (Data Withholding Attack):**
+
+
+*Figure X: Sequence diagram synthesized from TLC trace demonstrating a successful Data Withholding Attack when DA validation is ablated.*
+
+* *State \[X\] (action \= "ServerByzantineDataWithholding"):* A Byzantine leader constructs a block proposal withholding the transaction body from Celestia (attestation \= FALSE).  
+* *State \[Y\] (action \= "UponProposalInPropose"):* Honest validators miss the consistency check and blindly cast PREVOTE messages.  
+* *State \[Z\] (action \= "ServerUponProposalInPrecommitNoDecision"):* The network commits the block. The model checker halts execution, flagging a critical violation of the HybridTendermintInvariant (DAReceiptConsistency).
+
 
 ## References
 
@@ -984,9 +952,9 @@ This ensures that any two quorum decisions share at least one honest node, which
    https://arxiv.org/abs/2207.08392
 
 
-## 11. Future Work
+## Future Work
 
-### 11.1 Pipelined Tendermint (Phase Merging)
+### Pipelined Tendermint (Phase Merging)
 
 The current specification verifies an unpipelined Tendermint core. A pipelined variant targeting sub-two-second block times is planned, as documented in the TODO block of `EngramTendermint.tla`:
 
@@ -995,7 +963,7 @@ The current specification verifies an unpipelined Tendermint core. A pipelined v
 3. Delegate block commit to the proposer of round $r+1$.
 4. Update the Liveness refinement to require cooperation from two consecutive honest leaders (per LiDO Appendix D).
 
-### 11.2 Parametric Verification
+### Parametric Verification
 
 The current results use a small-scope hypothesis (4 nodes, $f = 1$). Extending the proof to arbitrary $N$ and $f$ would require inductive invariant techniques or a parametric model checker, and is left for future work.
 

@@ -4,32 +4,34 @@
  *
  * Runs TLC to verify SAFETY properties of the concrete EngramServer spec
  * against the abstract EngramConsensus (LiDO) spec via EngramRefinement.
- *
- * Run separately from MC_ServerRefinementLiveness because:
- *   - Safety uses INIT/NEXT directly (no fairness, faster state exploration)
- *   - Higher bounds (MaxRound = 3) are feasible without fairness overhead
- *
- * Corresponding config: MC_ServerRefinementSafety.cfg
  *)
-EXTENDS EngramServer, EngramRefinement, TLC, Sequences
+EXTENDS EngramServer, EngramServerRefinement, TLC, Sequences
 
-CONSTANTS n1, n2, n3, n4
+\* CONSTANTS n1, n2, n3, n4
+CONSTANTS n1, n2, n3, n4, n5, n6, n7
 
 ASSUME QuorumOverlap
 
 
 (* ======================== NETWORK CONFIGURATION ========================== *)
-MC_Nodes  == {n1, n2, n3, n4}
-MC_Method == {"TX_NORMAL", "TX_WITHDRAWAL"}
-MC_Faulty == {n4}
-MC_Corr   == MC_Nodes \ MC_Faulty
+\* MC_Nodes  == {n1, n2, n3, n4}
+\* MC_Method == {"TX_NORMAL", "TX_WITHDRAWAL"}
+\* MC_Faulty == {n4}
+\* MC_Corr   == MC_Nodes \ MC_Faulty
 
+MC_Nodes == {n1, n2, n3, n4, n5, n6, n7}
+MC_Method == {"TX_NORMAL", "TX_WITHDRAWAL"}
+MC_Faulty == {n6, n7}
+MC_Corr   == MC_Nodes \ MC_Faulty
 
 (* ======================== ROTATIONAL LEADER SCHEDULE ===================== *)
 \* Round-robin proposer: node at position (r mod 4) + 1 in the sequence
-MC_NodeSeq  == <<n1, n2, n3, n4>>
-MC_Proposer == [r \in 0..5 |-> MC_NodeSeq[(r % 4) + 1]]
+\* MC_NodeSeq  == <<n1, n2, n3, n4>>
+\* MC_Proposer == [r \in 0..5 |-> MC_NodeSeq[(r % 4) + 1]]
 
+\* Round-robin proposer: node at position (r mod 7) + 1 in the sequence
+MC_NodeSeq == <<n1, n2, n3, n4, n5, n6, n7>>
+MC_Proposer == [r \in 0..10 |-> MC_NodeSeq[(r % 7) + 1]]
 
 (* ======================== INIT & NEXT ==================================== *)
 MC_ServerInit == ServerInit

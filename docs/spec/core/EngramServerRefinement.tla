@@ -1,4 +1,4 @@
---------------------------- MODULE EngramRefinement -------------------------
+--------------------------- MODULE EngramServerRefinement -------------------------
 (*
  * EngramRefinement — LiDO Abstract Refinement Mapping
  *
@@ -116,12 +116,12 @@ mapped_local_times ==
     ]
 
 \* Round mapping: the abstract consensus round leads the concrete max round by 1
-CurrentMaxRound == Max({ round[p] : p \in Corr })
+CURRENT_MAX_ROUND == Max({ round[p] : p \in Corr })
 
-CurrentRoundNodes == { p \in Corr : round[p] = CurrentMaxRound }
+CurrentRoundNodes == { p \in Corr : round[p] = CURRENT_MAX_ROUND }
 
 \* Timeout mapping: minimum remaining time among processes in the current round
-MinRemTime == Min({ local_rem_time[p] : p \in CurrentRoundNodes })
+MIN_REM_TIME == Min({ local_rem_time[p] : p \in CurrentRoundNodes })
 
 
 (* ======================== INSTANTIATION ================================== *)
@@ -137,9 +137,9 @@ AbstractConsensus ==
         MAX_BTC_HEIGHT  <- MAX_BTC_HEIGHT,
         tree            <- mapped_tree,
         fsm_state       <- mapped_fsm_state,
-        round           <- CurrentMaxRound + 1,
+        round           <- CURRENT_MAX_ROUND + 1,
         local_times     <- mapped_local_times,
-        rem_time        <- MinRemTime,
+        rem_time        <- MIN_REM_TIME,
         h_btc_current   <- h_btc_current + 2,
         h_btc_anchored  <- h_btc_anchored + 2
 
