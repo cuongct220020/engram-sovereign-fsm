@@ -6,9 +6,6 @@
  * It is the single source of truth for variable groupings (tuples) that are
  * referenced in UNCHANGED clauses and WF_vars fairness conditions throughout
  * EngramFSM, EngramTendermint, and EngramServer.
- *
- * Dependencies: none (no EXTENDS, no CONSTANTS of its own beyond what is
- * declared below and used by callers).
  *)
 
 CONSTANTS
@@ -27,7 +24,8 @@ VARIABLES
     valid_value,     \* Most recent valid proposal seen
     valid_round      \* Round in which valid_value was observed
 
-coreVars == <<round, step, decision, locked_value, locked_round, valid_value, valid_round>>
+tendermintCoreVars == <<round, step, decision, 
+                            locked_value, locked_round, valid_value, valid_round>>
 
 
 (* ======================== TEMPORAL / CLOCK VARIABLES ======================= *)
@@ -124,28 +122,31 @@ VARIABLES
     forced_tx_queue,         \* Transactions pending forced inclusion (censorship resistance)
     tx_ignored_rounds        \* Per-(process,tx) counter of rounds where tx was ignored
 
-censorVars == <<forced_tx_queue, tx_ignored_rounds>>
+censorshipVars == <<forced_tx_queue, tx_ignored_rounds>>
 
 \* Environment-only tuple consumed by EngramFSM (excludes consensus state)
 envVars ==
     <<btcSensorVars, daSensorVars, p2pSensorVars,
-      censorVars, reanchoring_proof_valid>>
+      censorshipVars, reanchoring_proof_valid>>
 
 
 (* ======================== SERVER / LIDO CERTIFICATE VARIABLES ============== *)
 \* Abstract pacemaker certificates used by EngramServer and the LiDO refinement.
 VARIABLES
-    qcs,    \* Set of Quorum Certificates (E_QC, M_QC)
-    tcs     \* Set of Timeout Certificates (T_QC)
+    quorum_certs,       \* Set of Quorum Certificates (E_QC, M_QC)
+    timeout_certs       \* Set of Timeout Certificates (T_QC)
+
+\* Tuple of consensus certificates (LiDO Certificates)
+certificateVars == <<quorum_certs, timeout_certs>>
 
 \* Aggregate tuple for EngramTendermint (UNCHANGED / WF_vars references)
 tendermintVars ==
-    <<coreVars, temporalVars, bookkeepingVars,
-      invariantVars, fsmVars, censorVars>>
+    <<tendermintCoreVars, temporalVars, bookkeepingVars,
+      invariantVars, fsmVars, censorshipVars>>
 
-\* Aggregate tuple for EngramServer (superset of tendermintVars + qcs/tcs)
+\* Aggregate tuple for EngramServer
 serverVars ==
-    <<coreVars, temporalVars, invariantVars, bookkeepingVars,
-      qcs, tcs, fsmVars, censorVars>>
+    <<tendermintCoreVars, temporalVars, invariantVars, 
+        bookkeepingVars, certificateVars, fsmVars, censorshipVars>>
 
 =========================================================================

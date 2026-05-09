@@ -21,78 +21,74 @@
  *)
 EXTENDS EngramServer
 
+CONSTANTS 
+    K_DEEP_FINALITY
 
-(* ======================== HOMOGENEOUS STAKE ASSUMPTION ==================== *)
-\* Each node contributes exactly 1 vote unit.
-\* TotalStake = |Nodes|, so a quorum needs more than 2/3 of Nodes.
-HomogeneousStake      == [n \in Nodes |-> 1]
+(* ======================== STAKE CONFIGURATION ========================= *)
+HomogeneousStake == [n \in Nodes |-> 1]
 HomogeneousTotalStake == Cardinality(Nodes)
 
-\* Pick any valid quorum (used for mapping voters in synthesized certificates)
+\* Randomly select a valid quorum to assign to abstract certificates
 Q_abstract == CHOOSE q \in SUBSET Nodes : Cardinality(q) >= THRESHOLD2
 
+(* ======================== TREE MAPPING HELPERS ======================== *)
 
-(* ======================== CERTIFICATE MAPPING HELPERS ==================== *)
-\* Synthesize C-caches from concrete precommit quorums.
-\* Each (round, id) pair with >= 2f+1 precommits becomes a C-cache entry.
-CommitPairs ==
-    UNION { { <<r, m.id>> : m \in msgs_precommit[r] } : r \in Rounds }
-
-ValidCommits ==
-    { pair \in CommitPairs :
-        /\ pair[2] /= NilProposal
-        /\ Cardinality({ m \in msgs_precommit[pair[1]] : m.id = pair[2] }) >= THRESHOLD2 }
-
-\* C-caches derived from concrete precommit quorums
-c_caches_dynamic == {
-    [ type          |-> "C",
-      c_round       |-> pair[1] + 1,
-      caller        |-> Proposer[pair[2]],
-      method        |-> "None",
-      voters        |-> Q_abstract,
-      btc_anchored  |-> h_btc_current + 2 ] : pair \in ValidCommits
+\* Map concrete Pull certificates to abstract E-caches
+MappedECaches == { 
+    [ type         |-> "E",
+      cert_round   |-> qc.round + 1, 
+      caller       |-> qc.caller, 
+      method       |-> "None", 
+      voters       |-> Q_abstract, 
+      btc_anchored |-> qc.btc_anchored + K_DEEP_FINALITY
+    ] : qc \in { q \in quorum_certs : q.type = "E_QC" } 
 }
 
+\* Map concrete Invoke certificates to abstract M-caches
+MappedMCaches == { 
+    [ type         |-> "M", 
+      cert_round   |-> qc.round + 1, 
+      caller       |-> qc.caller, 
+      method       |-> qc.method, 
+      voters       |-> {qc.caller}, 
+      btc_anchored |-> qc.btc_anchored + K_DEEP_FINALITY
+    ] : qc \in { q \in quorum_certs : q.type = "M_QC" } 
+}
+
+\* Map concrete Timeout certificates to abstract T-caches
+MappedTCaches == { 
+    [ type         |-> "T", 
+      cert_round   |-> tc.round + 1, 
+      caller       |-> tc.caller, 
+      method       |-> "None", 
+      voters       |-> Q_abstract, 
+      btc_anchored |-> tc.btc_anchored + K_DEEP_FINALITY
+    ] : tc \in timeout_certs
+}
+
+\* Map concrete Push certificates to abstract M-caches
+MappedCCaches ==
+    LET CommitPairs == UNION { { <<r, m.id>> : m \in msgs_precommit[r] } : r \in Rounds }
+        ValidCommits == { p \in CommitPairs : 
+                          /\ p[2] /= NilProposal 
+                          /\ Cardinality({ m \in msgs_precommit[p[1]] : m.id = p[2] }) >= THRESHOLD2 }
+    IN { [ type         |-> "C", 
+           cert_round   |-> p[1] + 1,
+           caller       |-> Proposer[p[1]],
+           method       |-> "None",
+           voters       |-> Q_abstract,
+           btc_anchored |-> p[2].btc_receipt.checkpoint_block_height + K_DEEP_FINALITY 
+         ] : p \in ValidCommits }
 
 (* ======================== ABSTRACT TREE MAPPING ========================== *)
-\* Translate concrete QC/TC certificate sets (qcs, tcs) into the abstract
+\* Translate concrete QC/TC certificate sets (quorum_certs, timout_certs) into the abstract
 \* AdoB buffer tree consumed by EngramConsensus.
 \*
 \*   E_QC  -> E-cache  (Pull event)
 \*   M_QC  -> M-cache  (Invoke event)
 \*   T_QC  -> T-cache  (Timeout event)
-\*   precommit quorum -> C-cache (Push / commit event)
-mapped_tree ==
-    LET
-        e_caches == {
-            [ type          |-> "E",
-              c_round       |-> qc.round + 1,
-              caller        |-> qc.caller,
-              method        |-> "None",
-              voters        |-> Q_abstract,
-              btc_anchored  |-> qc.btc_anchored + 2 ]
-            : qc \in { q \in qcs : q.type = "E_QC" } }
-
-        m_caches == {
-            [ type          |-> "M",
-              c_round       |-> qc.round + 1,
-              caller        |-> qc.caller,
-              method        |-> qc.method,
-              voters        |-> {qc.caller},
-              btc_anchored  |-> qc.btc_anchored + 2 ]
-            : qc \in { q \in qcs : q.type = "M_QC" } }
-
-        t_caches == {
-            [ type          |-> "T",
-              c_round       |-> tc.round + 1,
-              caller        |-> tc.caller,
-              method        |-> "None",
-              voters        |-> Q_abstract,
-              btc_anchored  |-> tc.btc_anchored + 2 ]
-            : tc \in { t \in tcs : t.type = "T_QC" } }
-    IN
-        e_caches \cup m_caches \cup c_caches_dynamic \cup t_caches
-
+\*   precommit quorum -> C-cache (Push / Commit event)
+MappedTree == MappedECaches \union MappedMCaches \union MappedCCaches \union MappedTCaches
 
 (* ======================== ABSTRACT STATE MAPPINGS ======================== *)
 \* FSM state mapping: collapse SUSPICIOUS into ANCHORED (abstract spec only
@@ -104,29 +100,21 @@ mapped_fsm_state ==
 
 \* Local time mapping: a node's abstract logical time is the highest E_QC or
 \* C-cache round it has participated in.
-mapped_local_times ==
-    [ n \in Nodes |->
-        IF n \in Q_abstract
-        THEN Max(
-                 {0}
-                 \cup { qc.round + 1 : qc \in { q \in qcs : q.type = "E_QC" } }
-                 \cup { c.c_round + 1 : c \in c_caches_dynamic }
-             )
-        ELSE 0
-    ]
+mapped_local_times == 
+    [ n \in Nodes |-> IF n \in Q_abstract THEN 
+        Max( {0} \cup { qc.round + 1 : qc \in { q \in quorum_certs : q.type = "E_QC" } } 
+                 \cup { c.cert_round : c \in MappedCCaches } ) 
+        ELSE 0 ]
 
 \* Round mapping: the abstract consensus round leads the concrete max round by 1
-CURRENT_MAX_ROUND == Max({ round[p] : p \in Corr })
+CURRENT_MAX_ROUND == Max({ round[p] : p \in HonestNodes })
 
-CurrentRoundNodes == { p \in Corr : round[p] = CURRENT_MAX_ROUND }
-
-\* Timeout mapping: minimum remaining time among processes in the current round
-MIN_REM_TIME == Min({ local_rem_time[p] : p \in CurrentRoundNodes })
+MIN_REM_TIME == 
+    LET CurrentNodes == { p \in HonestNodes : round[p] = CURRENT_MAX_ROUND }
+    IN Min({ local_rem_time[p] : p \in CurrentNodes })
 
 
 (* ======================== INSTANTIATION ================================== *)
-\* Bind all abstract variables to their concrete mappings.
-\* The "+2" offsets on btc heights account for the finality depth k=2.
 AbstractConsensus ==
     INSTANCE EngramConsensus WITH
         Nodes           <- Nodes,
@@ -135,13 +123,14 @@ AbstractConsensus ==
         TOTAL_STAKE     <- HomogeneousTotalStake,
         RESET_TIME      <- TIMEOUT_DURATION,
         MAX_BTC_HEIGHT  <- MAX_BTC_HEIGHT,
-        tree            <- mapped_tree,
+        K_DEEP_FINALITY <- K_DEEP_FINALITY,        
+        tree            <- MappedTree,
         fsm_state       <- mapped_fsm_state,
         round           <- CURRENT_MAX_ROUND + 1,
         local_times     <- mapped_local_times,
         rem_time        <- MIN_REM_TIME,
-        h_btc_current   <- h_btc_current + 2,
-        h_btc_anchored  <- h_btc_anchored + 2
+        h_btc_current   <- h_btc_current + K_DEEP_FINALITY,
+        h_btc_anchored  <- h_btc_anchored + K_DEEP_FINALITY
 
 
 (* ======================== REFINEMENT CHECKS ============================== *)
@@ -149,12 +138,6 @@ AbstractConsensus ==
 \* This is the foundational safety assumption — checked as ASSUME in MC files.
 QuorumOverlap ==
     \A q1, q2 \in AbstractConsensus!ValidQuorums :
-        (q1 \intersect q2) \intersect Corr /= {}
-
-\* \* RefinementSafety:  concrete ServerSpec satisfies the abstract Safety spec
-\* RefinementSafety   == AbstractConsensus!Safety
-
-\* \* RefinementLiveness: concrete ServerSpec satisfies the abstract Liveness spec
-\* RefinementLiveness == AbstractConsensus!Liveness
+        (q1 \intersect q2) \intersect HonestNodes /= {}
 
 =============================================================================

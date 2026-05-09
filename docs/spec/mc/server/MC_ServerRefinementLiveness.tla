@@ -3,7 +3,7 @@
  * MC_ServerRefinementLiveness — TLC Liveness Model Checker
  *
  * Runs TLC to verify LIVENESS properties of the concrete EngramServer spec
- * against the abstract EngramConsensus (LiDO) spec via EngramRefinement.
+ * against the abstract EngramConsensus (LiDO) spec via EngramServerRefinement.
  *)
 EXTENDS EngramServer, EngramServerRefinement, TLC, Sequences
 
@@ -16,13 +16,13 @@ ASSUME QuorumOverlap
 (* ======================== NETWORK CONFIGURATION ========================== *)
 MC_Nodes  == {n1, n2, n3, n4}
 MC_Method == {"TX_NORMAL", "TX_WITHDRAWAL"}
-MC_Faulty == {n4}
-MC_Corr   == MC_Nodes \ MC_Faulty
+MC_Byzantine == {n1}
+MC_Honest   == MC_Nodes \ MC_Byzantine
 
 \* MC_Nodes == {n1, n2, n3, n4, n5, n6, n7}
 \* MC_Method == {"TX_NORMAL", "TX_WITHDRAWAL"}
-\* MC_Faulty == {n6, n7}
-\* MC_Corr   == MC_Nodes \ MC_Faulty
+\* MC_Byzantine == {n6, n7}
+\* MC_Honest   == MC_Nodes \ MC_Byzantine
 
 (* ======================== ROTATIONAL LEADER SCHEDULE ===================== *)
 \* Round-robin proposer: node at position (r mod 4) + 1 in the sequence
@@ -43,7 +43,7 @@ MC_ServerNext == ServerNext
 \* Weak fairness on message processing ensures every enabled action eventually fires (prevents "unfair" stuttering in liveness proofs).
 MC_ServerFairness ==
     /\ WF_serverVars(ServerAdvanceRealTime)
-    /\ \A p \in MC_Corr : WF_serverVars(ServerMessageProcessing(p))
+    /\ \A p \in MC_Honest : WF_serverVars(ServerMessageProcessing(p))
 
 \* Full liveness specification: safety behaviour + fairness assumptions
 MC_ServerSpec ==
@@ -54,7 +54,7 @@ MC_ServerSpec ==
 \* Bounds are tighter than Safety run to keep liveness checking tractable.
 StateSpaceLimit ==
     \* Tendermint bounds
-    /\ \A n \in MC_Corr : round[n] <= MAX_ROUND
+    /\ \A n \in MC_Honest : round[n] <= MAX_ROUND
     /\ real_time <= MAX_TIMESTAMP
 
     \* Chain height bounds (monotone by construction, but TLC needs explicit caps)

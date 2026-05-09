@@ -10,7 +10,7 @@
  *   - Hybrid safety invariants (FSM <-> consensus cross-checks)
  *   - Liveness properties under GST
  *
- * The LiDO abstract refinement mapping lives in EngramRefinement.tla.
+ * The LiDO abstract refinement mapping lives in EngramServerRefinement.tla.
  *
  * Depends on: EngramFSM, EngramTendermint, Naturals, FiniteSets
  *)
@@ -81,9 +81,9 @@ ServerInsertProposal(p) ==
                           caller        |-> p,
                           method        |-> "None",
                           btc_anchored  |-> h_btc_current ]
-                  IN qcs' = qcs \cup {new_EQC}
-    /\ UNCHANGED <<tcs, fsmVars, censorVars>>
-    /\ UNCHANGED <<coreVars, temporalVars>>
+                  IN quorum_certs' = quorum_certs \cup {new_EQC}
+    /\ UNCHANGED <<timeout_certs, fsmVars, censorshipVars>>
+    /\ UNCHANGED <<tendermintCoreVars, temporalVars>>
     /\ UNCHANGED <<msgs_prevote, msgs_precommit, msgs_timeout,
                    evidence, received_timely_proposal, inspected_proposal>>
     /\ action' = "ServerInsertProposal"
@@ -105,12 +105,12 @@ ServerProposerVotes(p) ==
                    method       |-> prop.value,
                    btc_anchored |-> h_btc_current ]
            IN
-           /\ qcs' = qcs \cup {new_MQC}
-           /\ tcs' = tcs
+           /\ quorum_certs' = quorum_certs \cup {new_MQC}
+           /\ timeout_certs' = timeout_certs
        ELSE
-           /\ qcs' = qcs
-           /\ tcs' = tcs
-    /\ action' = "ServerProposerVotes"
+           /\ quorum_certs' = quorum_certs
+           /\ timeout_certs' = timeout_certs
+    \* /\ action' = "ServerProposerVotes"
 
 
 \* Hook 3: Intercept the decision moment -> trigger FSM transition + state sync.
@@ -158,7 +158,7 @@ ServerUponProposalInPrecommitNoDecision(p) ==
            /\ UNCHANGED <<p2pSensorVars>>
 
     \* Step 6: Keep pacemaker certificates and censorship sensor unchanged
-    /\ UNCHANGED <<qcs, tcs, censorVars>>
+    /\ UNCHANGED <<certificateVars, censorshipVars>>
     /\ action' = "ServerUponProposalInPrecommitNoDecision"
 
 
@@ -177,15 +177,15 @@ ServerUponTimeoutCert(p) ==
                round        |-> round[p],
                caller       |-> p,
                btc_anchored |-> h_btc_current ]
-        IN tcs' = tcs \cup {new_TQC}
+        IN timeout_certs' = timeout_certs \cup {new_TQC}
 
-    /\ UNCHANGED <<qcs, fsmVars>>
+    /\ UNCHANGED <<quorum_certs, fsmVars>>
     /\ UNCHANGED <<forced_tx_queue>>
     /\ UNCHANGED <<local_clock, real_time>>
     /\ UNCHANGED <<end_consensus, proposal_time, proposal_received_time>>
     /\ UNCHANGED <<decision, locked_value, locked_round, valid_value, valid_round>>
-    /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout,
-                   evidence, received_timely_proposal, inspected_proposal>>
+    /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout>>
+    /\ UNCHANGED <<evidence, received_timely_proposal, inspected_proposal>>
     /\ action' = "ServerUponTimeoutCert"
 
 
@@ -205,7 +205,7 @@ ServerPassThrough(p) ==
 
 ServerMessageProcessing(p) ==
     \/ /\ ServerPassThrough(p)
-       /\ UNCHANGED <<qcs, tcs, fsmVars>>
+       /\ UNCHANGED <<certificateVars, fsmVars>>
     \/ ServerInsertProposal(p)
     \/ ServerProposerVotes(p)
 
@@ -214,29 +214,65 @@ ServerMessageProcessing(p) ==
 ServerInit ==
     /\ TendermintInit
     /\ FSMInit
-    /\ qcs = {}
-    /\ tcs = {}
+    /\ quorum_certs = {} 
+    /\ timeout_certs = {}
 
 ServerAdvanceRealTime ==
     /\ AdvanceRealTime
-    /\ UNCHANGED <<qcs, tcs, fsmVars>>
+    /\ UNCHANGED <<certificateVars, fsmVars>>
 
-ServerByzantineDataWithholding ==
-    /\ ByzantineDataWithholding
-    /\ UNCHANGED <<qcs, tcs, fsmVars>>
+ServerByzantineDataWithholding == 
+    /\ ByzantineDataWithholding 
+    \* Nhịp 1: Chỉ sinh E_QC để khớp đúng 1 bước Pull của LiDO
+    /\ LET r == CHOOSE r \in Rounds : msgs_propose[r] /= msgs_propose'[r]
+           new_EQC == [ 
+                type |-> "E_QC", 
+                round |-> r, 
+                caller |-> Proposer[r], 
+                btc_anchored |-> h_btc_current 
+            ]
+       IN quorum_certs' = quorum_certs \cup {new_EQC}
+    /\ UNCHANGED <<timeout_certs, fsmVars>>
+
+
+ServerByzantineInvoke == 
+    \E r \in Rounds :
+        /\ Proposer[r] \in ByzantineNodes
+        /\ \E m \in msgs_propose[r] : m.src = Proposer[r]
+        /\ \E eqc \in quorum_certs : 
+                /\ eqc.type = "E_QC" 
+                /\ eqc.round = r 
+                /\ eqc.caller = Proposer[r]
+        /\ ~\E mqc \in quorum_certs : 
+                /\ mqc.type = "M_QC" 
+                /\ mqc.round = r 
+                /\ mqc.caller = Proposer[r]
+        \* Nhịp 2: Sinh M_QC để khớp đúng bước Invoke của LiDO
+        /\ LET m == CHOOSE msg \in msgs_propose[r] : msg.src = Proposer[r]
+               new_MQC == [ 
+                    type |-> "M_QC", 
+                    round |-> r, 
+                    caller |-> Proposer[r], 
+                    method |-> m.proposal.value, 
+                    btc_anchored |-> h_btc_current 
+                ]
+           IN quorum_certs' = quorum_certs \cup {new_MQC}
+        /\ UNCHANGED <<tendermintVars, timeout_certs>>
+
 
 ServerNext ==
     \/ ServerAdvanceRealTime
     \/ /\ SynchronizedLocalClocks
-       /\ \E p \in Corr : ServerMessageProcessing(p)
+       /\ \E p \in HonestNodes : ServerMessageProcessing(p)
     
     \/ /\ UpdateSensors
-       /\ UNCHANGED <<coreVars, temporalVars, invariantVars, censorVars>>
+       /\ UNCHANGED <<tendermintCoreVars, temporalVars, invariantVars, censorshipVars, certificateVars>>
        /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout>>
        /\ UNCHANGED <<evidence, received_timely_proposal, inspected_proposal>>
-       /\ UNCHANGED <<qcs, tcs>>
        /\ action' = "UpdateSensors"
+    
     \/ ServerByzantineDataWithholding
+    \/ ServerByzantineInvoke
 
 ServerSpec == ServerInit /\ [][ServerNext]_serverVars
 
@@ -258,25 +294,25 @@ MonotonicitySafety ==
 
 \* Decided FSM state must match the current circuit-breaker state
 FSMStateConsistency ==
-    \A p \in Corr :
+    \A p \in HonestNodes :
         decision[p] /= NilDecision => decision[p].prop.fsm_state = state
 
 \* DA attestation must be present in any decided ANCHORED or RECOVERING block
 DAReceiptConsistency ==
-    \A p \in Corr :
+    \A p \in HonestNodes :
         (decision[p] /= NilDecision
          /\ decision[p].prop.fsm_state \in {"ANCHORED", "RECOVERING"})
         => decision[p].prop.da_receipt.attestation = TRUE
 
 \* BTC anchor height in decided proposal must match the current anchored height
 BTCConsistency ==
-    \A p \in Corr :
+    \A p \in HonestNodes :
         decision[p] /= NilDecision
         => decision[p].prop.btc_receipt.checkpoint_block_height = h_btc_anchored
 
 \* ZK proof must be present in any RECOVERING block that completed hysteresis
 ZKProofConsistency ==
-    \A p \in Corr :
+    \A p \in HonestNodes :
         (decision[p] /= NilDecision
          /\ decision[p].prop.fsm_state = "RECOVERING"
          /\ safe_blocks = HYSTERESIS_WAIT)
@@ -291,9 +327,9 @@ HybridTendermintInvariant ==
 
 
 (* ======================== LIVENESS PROPERTIES ============================ *)
-\* At least one correct process eventually decides
-ServerEventualDecision ==
-    <>(\E p \in Corr : step[p] = "DECIDED")
+\* At least one honest node (process) eventually decides
+ServerEventualDecisionLiveness ==
+    <>(\E p \in HonestNodes : step[p] = "DECIDED")
 
 \* All three FSM liveness properties from EngramFSM hold end-to-end
 ServerFSMLiveness ==
@@ -304,9 +340,9 @@ ServerFSMLiveness ==
 \* Every tx that is repeatedly proposed must eventually be decided
 ForcedInclusionLiveness ==
     \A tx \in ValidValues :
-        ([]<>(\E r \in Rounds, p \in Corr :
+        ([]<>(\E r \in Rounds, p \in HonestNodes :
                   \E m \in msgs_propose[r] : m.src = p /\ m.proposal.value = tx))
-        => <>(\E p \in Corr :
+        => <>(\E p \in HonestNodes :
                   decision[p] /= NilDecision /\ decision[p].prop.value = tx)
 
 \* Global Stabilisation Time predicate: clocks sync + enough peers + ANCHORED
@@ -316,7 +352,7 @@ GSTReached ==
     /\ state = "ANCHORED"
 
 \* Under repeated GST, the system must eventually reach a decision
-EventualDecisionUnderGST ==
-    ([]<> GSTReached) ~> (\E p \in Corr : step[p] = "DECIDED")
+EventualDecisionUnderGSTLiveness ==
+    ([]<> GSTReached) ~> (\E p \in HonestNodes : step[p] = "DECIDED")
 
 ===================================================================

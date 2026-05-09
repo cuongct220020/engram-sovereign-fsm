@@ -17,11 +17,11 @@ EXTENDS Integers, FiniteSets, EngramVars, EngramFSM
 \* General consensus parameters
 CONSTANTS
     \* @type: Set(PROCESS);
-    Corr,           \* Set of correct (non-faulty) processes
+    HonestNodes,           \* Set of honest (non-byzantine) nodes (processes)
     \* @type: Set(PROCESS);
-    Faulty,         \* Set of Byzantine processes (may be empty)
+    ByzantineNodes,         \* Set of Byzantine nodes (may be empty)
     \* @type: Int;
-    N,              \* Total number of processes: |Corr| + |Faulty|
+    N,              \* Total number of nodes: |HonestNodes| + |ByzantineNodes|
     \* @type: Int;
     T,              \* Upper bound on the number of Byzantine processes
     \* @type: ROUND;
@@ -53,12 +53,12 @@ CONSTANTS
     \* @type: Int;
     MAX_IGNORE_ROUNDS   \* Censorship threshold: rounds a tx can be ignored
 
-ASSUME(N = Cardinality(Corr \union Faulty))
+ASSUME(N = Cardinality(HonestNodes \union ByzantineNodes))
 
 
 (* ======================== BASIC DEFINITIONS ============================= *)
 \* @type: Set(PROCESS);
-AllProcs == Corr \union Faulty      \* the set of all processes
+AllProcs == HonestNodes \union ByzantineNodes      \* the set of all processes
 
 \* @type: Set(ROUND);
 Rounds == 0..MAX_ROUND               \* the set of potential rounds
@@ -95,17 +95,23 @@ FSMStatesOrNil == FSMStates \union {NilFSMState}
 
 \* @type: Set(Int);
 BTCHeights == 0..MAX_BTC_HEIGHT
+\* @type: Set(<<Str, Int>>);
+ValidHashes  == { <<"BTC_BLOCK", h>> : h \in BTCHeights }
+\* @type: Set(<<Str, Int>>);
+ForgedHashes == { <<"BTC_FORK", h>>  : h \in BTCHeights }
+\* @type: Set(<<Str, Int>>);
+AllHashes    == {<<"NIL", -1>>} \cup ValidHashes \cup ForgedHashes
 \* @type: Int;
 NilBTCHeight == -1
 \* @type: Set(BTC_RECEIPT);
 BTCReceipts == [ 
-    checkpoint_block_height : BTCHeights,   \* Height of the Bitcoin block containing the OP_RETURN tx
-    checkpoint_block_hash   : STRING        \* Hash of the Bitcoin block containing the Engram Checkpoint (OP_RETURN tx)
+    checkpoint_block_height : BTCHeights,       \* Height of the Bitcoin block containing the OP_RETURN tx
+    checkpoint_block_hash   : AllHashes         \* Hash of the Bitcoin block containing the Engram Checkpoint (OP_RETURN tx)
 ]
 \* @type: BTC_RECEIPT;
 NilBTCReceipt == [ 
     checkpoint_block_height     |-> NilBTCHeight, 
-    checkpoint_block_hash       |-> "NilHash" 
+    checkpoint_block_hash       |-> <<"NIL", -1>>  
 ]
 \* @type: Set(BTC_RECEIPT);
 BTCReceiptsOrNil == BTCReceipts \union {NilBTCReceipt}
@@ -167,7 +173,7 @@ DecisionsOrNil == Decisions \union {NilDecision}
 
 (* ======================== QUORUM THRESHOLDS ============================== *)
 \* @type: Int;
-THRESHOLD1 == T + 1       \* f+1: at least one correct process
+THRESHOLD1 == T + 1       \* f+1: at least one honest node
 \* @type: Int;
 THRESHOLD2 == 2 * T + 1   \* 2f+1: quorum (requires N > 3T)
 
@@ -215,12 +221,12 @@ IsTimely(processTime, messageTime) ==
 \* TRUE if all pairs of correct clocks are within Precision of each other.
 \* @type: Bool;
 SynchronizedLocalClocks ==
-    \A p \in Corr : \A q \in Corr :
+    \A p \in HonestNodes : \A q \in HonestNodes :
         p /= q =>
             \/ /\ local_clock[p] >= local_clock[q]
-               /\ local_clock[p] - local_clock[q] < PRECISION
+               /\ local_clock[p] - local_clock[q] <= PRECISION
             \/ /\ local_clock[p] <  local_clock[q]
-               /\ local_clock[q] - local_clock[p] < PRECISION
+               /\ local_clock[q] - local_clock[p] <= PRECISION
 
 (********************* DYNAMIC TOLERANCE CALCULATION *********************)
 \* The tolerance expands dynamically based on the Consensus Round.
@@ -278,11 +284,11 @@ IsValidProposal(prop) ==
         /\ prop.timestamp \in MIN_TIMESTAMP..MAX_TIMESTAMP
         /\ prop.fsm_state = CalculateNextFSMState   \* Cross-check
         
-        \* DA Pipeline Check: Data must be available and within the allowed gap
-        /\ (prop.fsm_state \in {"ANCHORED", "RECOVERING"}) => 
-            /\ prop.da_receipt.attestation = TRUE
-            /\ prop.da_receipt.published_block_height <= h_engram_current
-            /\ prop.da_receipt.published_block_height >= (h_engram_current - DA_THRESHOLD - da_tol)
+        \* \* DA Pipeline Check: Data must be available and within the allowed gap
+        \* /\ (prop.fsm_state \in {"ANCHORED", "RECOVERING"}) => 
+        \*     /\ prop.da_receipt.attestation = TRUE
+        \*     /\ prop.da_receipt.published_block_height <= h_engram_current
+        \*     /\ prop.da_receipt.published_block_height >= (h_engram_current - DA_THRESHOLD - da_tol)
 
         \* Settlement Monotonicity & BTC Light Client Hash Check
         /\ prop.btc_receipt.checkpoint_block_height >= (h_btc_current - btc_tol)
@@ -328,21 +334,21 @@ Decision(prop, r) ==
 
 
 (* ======================== BYZANTINE MESSAGE SETS ========================= *)
-\* Pre-populate message buffers with faulty nodes' default messages so they
+\* Pre-populate message buffers with byzantine nodes' default messages so they
 \* can immediately contribute to quorums (modelling BFT adversary capability).
 \* Only T × MAX_ROUND messages total — negligible state space cost.
 
 \* @type: (ROUND) => Set(MESSAGE);
 FaultyTimeouts(r) ==
-    { [type |-> "TIMEOUT",    src |-> f, round |-> r] : f \in Faulty }
+    { [type |-> "TIMEOUT",    src |-> f, round |-> r] : f \in ByzantineNodes }
 
 \* @type: (ROUND) => Set(MESSAGE);
 FaultyPrevotes(r) ==
-    { [type |-> "PREVOTE",   src |-> f, round |-> r, id |-> Id(NilProposal)] : f \in Faulty }
+    { [type |-> "PREVOTE",   src |-> f, round |-> r, id |-> Id(NilProposal)] : f \in ByzantineNodes }
 
 \* @type: (ROUND) => Set(MESSAGE);
 FaultyPrecommits(r) ==
-    { [type |-> "PRECOMMIT", src |-> f, round |-> r, id |-> Id(NilProposal)] : f \in Faulty }
+    { [type |-> "PRECOMMIT", src |-> f, round |-> r, id |-> Id(NilProposal)] : f \in ByzantineNodes }
 
 (* ======================== INITIALIZATION ================================= *)
 \* Helper: set of all structurally valid proposal messages for round r
@@ -366,22 +372,22 @@ BenignRoundsInMessages(msgfun) ==
 
 \* Initial state — some Byzantine messages may already be present
 TendermintInit ==
-    /\ round              = [p \in Corr |-> 0]
-    /\ local_clock       \in [Corr -> MIN_TIMESTAMP..(MIN_TIMESTAMP + PRECISION)]
-    /\ local_rem_time     = [p \in Corr |-> TIMEOUT_DURATION]
+    /\ round              = [p \in HonestNodes |-> 0]
+    /\ local_clock       \in [HonestNodes -> MIN_TIMESTAMP..(MIN_TIMESTAMP + PRECISION)]
+    /\ local_rem_time     = [p \in HonestNodes |-> TIMEOUT_DURATION]
     /\ real_time          = 0
-    /\ step               = [p \in Corr |-> "PROPOSE"]
-    /\ decision           = [p \in Corr |-> NilDecision]
-    /\ locked_value        = [p \in Corr |-> NilValue]
-    /\ locked_round        = [p \in Corr |-> NilRound]
-    /\ valid_value         = [p \in Corr |-> NilProposal]
-    /\ valid_round         = [p \in Corr |-> NilRound]
+    /\ step               = [p \in HonestNodes |-> "PROPOSE"]
+    /\ decision           = [p \in HonestNodes |-> NilDecision]
+    /\ locked_value        = [p \in HonestNodes |-> NilValue]
+    /\ locked_round        = [p \in HonestNodes |-> NilRound]
+    /\ valid_value         = [p \in HonestNodes |-> NilProposal]
+    /\ valid_round         = [p \in HonestNodes |-> NilRound]
     /\ msgs_propose        = [r \in Rounds |-> {}]
     /\ msgs_prevote        = [r \in Rounds |-> FaultyPrevotes(r)]
     /\ msgs_precommit      = [r \in Rounds |-> FaultyPrecommits(r)]
     /\ msgs_timeout        = [r \in Rounds |-> FaultyTimeouts(r)]
-    /\ received_timely_proposal = [p \in Corr |-> {}]
-    /\ inspected_proposal      = [r \in Rounds, p \in Corr |-> NilTimestamp]
+    /\ received_timely_proposal = [p \in HonestNodes |-> {}]
+    /\ inspected_proposal      = [r \in Rounds, p \in HonestNodes |-> NilTimestamp]
     /\ BenignRoundsInMessages(msgs_propose)
     /\ BenignRoundsInMessages(msgs_prevote)
     /\ BenignRoundsInMessages(msgs_precommit)
@@ -389,17 +395,17 @@ TendermintInit ==
     /\ action             = "Init"
     /\ begin_round         = [r \in Rounds |->
                                 IF r = 0
-                                THEN Min({local_clock[p] : p \in Corr})
+                                THEN Min({local_clock[p] : p \in HonestNodes})
                                 ELSE MAX_TIMESTAMP]
-    /\ end_consensus       = [p \in Corr |-> NilTimestamp]
+    /\ end_consensus       = [p \in HonestNodes |-> NilTimestamp]
     /\ last_begin_round    = [r \in Rounds |->
                                 IF r = 0
-                                THEN Max({local_clock[p] : p \in Corr})
+                                THEN Max({local_clock[p] : p \in HonestNodes})
                                 ELSE NilTimestamp]
     /\ proposal_time         = [r \in Rounds |-> NilTimestamp]
     /\ proposal_received_time = [r \in Rounds |-> NilTimestamp]
     /\ forced_tx_queue      = {"TX_NORMAL"}
-    /\ tx_ignored_rounds    = [p \in Corr |-> [tx \in ValidValues |-> 0]]
+    /\ tx_ignored_rounds    = [p \in HonestNodes |-> [tx \in ValidValues |-> 0]]
 
 
 (* ======================== MESSAGE BROADCAST HELPERS ====================== *)
@@ -491,7 +497,7 @@ InsertProposal(p, prop) ==
     /\ BroadcastProposal(p, r, prop, valid_round[p])
     /\ IsValidProposal(prop)
     /\ proposal_time' = [proposal_time EXCEPT ![r] = real_time]
-    /\ UNCHANGED <<temporalVars, coreVars, fsmVars, censorVars>>
+    /\ UNCHANGED <<temporalVars, tendermintCoreVars, fsmVars, censorshipVars>>
     /\ UNCHANGED <<msgs_prevote, msgs_precommit, msgs_timeout, evidence,
                    received_timely_proposal, inspected_proposal>>
     /\ UNCHANGED <<begin_round, end_consensus, last_begin_round, proposal_received_time>>
@@ -521,7 +527,7 @@ ReceiveProposal(p) ==
                             /\ UNCHANGED proposal_received_time
                \/ /\ ~is_timely
                   /\ UNCHANGED <<received_timely_proposal, proposal_received_time>>
-        /\ UNCHANGED <<temporalVars, coreVars, fsmVars, censorVars>>
+        /\ UNCHANGED <<temporalVars, tendermintCoreVars, fsmVars, censorshipVars>>
         /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout, evidence>>
         /\ UNCHANGED <<begin_round, end_consensus, last_begin_round, proposal_time>>
         /\ action' = "ReceiveProposal"
@@ -567,7 +573,7 @@ UponProposalInPropose(p) ==
                               valid_value, valid_round>>
                /\ UNCHANGED <<msgs_propose, msgs_precommit, msgs_timeout,
                               received_timely_proposal, inspected_proposal>>
-               /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
+               /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorshipVars>>
         /\ action' = "UponProposalInPropose"
 
 
@@ -595,7 +601,7 @@ UponProposalInProposeAndPrevote(p) ==
                   ELSE NilProposal
               IN BroadcastPrevote(p, r, mid)
         /\ step' = [step EXCEPT ![p] = "PREVOTE"]
-        /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
+        /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorshipVars>>
         /\ UNCHANGED <<round, decision, locked_value, locked_round, valid_value, valid_round>>
         /\ UNCHANGED <<msgs_propose, msgs_precommit, msgs_timeout,
                        received_timely_proposal, inspected_proposal>>
@@ -612,7 +618,7 @@ UponQuorumOfPrevotesAny(p) ==
            /\ evidence' = MyEvidence \union evidence
            /\ BroadcastPrecommit(p, round[p], NilProposal)
            /\ step' = [step EXCEPT ![p] = "PRECOMMIT"]
-           /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
+           /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorshipVars>>
            /\ UNCHANGED <<round, decision, locked_value, locked_round, valid_value, valid_round>>
            /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_timeout,
                           received_timely_proposal, inspected_proposal>>
@@ -644,7 +650,7 @@ UponProposalInPrevoteOrCommitAndPrevote(p) ==
                   /\ valid_value'   = [valid_value  EXCEPT ![p] = prop]
                   /\ valid_round'   = [valid_round  EXCEPT ![p] = r]
                   /\ UNCHANGED <<locked_value, locked_round, msgs_precommit, step>>
-        /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
+        /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorshipVars>>
         /\ UNCHANGED <<round, decision>>
         /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_timeout,
                        received_timely_proposal, inspected_proposal>>
@@ -689,7 +695,7 @@ UponProposalInPrecommitNoDecision(p) ==
            /\ decision' = [decision EXCEPT ![p] = Decision(prop, r)]
         /\ end_consensus' = [end_consensus EXCEPT ![p] = local_clock[p]]
         /\ step'         = [step EXCEPT ![p] = "DECIDED"]
-        /\ UNCHANGED <<temporalVars, fsmVars, censorVars>>
+        /\ UNCHANGED <<temporalVars, fsmVars, censorshipVars>>
         /\ UNCHANGED <<round, locked_value, locked_round, valid_value, valid_round>>
         /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout,
                        received_timely_proposal, inspected_proposal>>
@@ -702,9 +708,10 @@ UponProposalInPrecommitNoDecision(p) ==
 OnTimeoutPropose(p) ==
     /\ step[p] = "PROPOSE"
     /\ p /= Proposer[round[p]]
+    /\ local_rem_time[p] = 0
     /\ BroadcastPrevote(p, round[p], NilProposal)
     /\ step' = [step EXCEPT ![p] = "PREVOTE"]
-    /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
+    /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorshipVars>>
     /\ UNCHANGED <<round, decision, locked_value, locked_round, valid_value, valid_round>>
     /\ UNCHANGED <<msgs_propose, msgs_precommit, msgs_timeout,
                    evidence, received_timely_proposal, inspected_proposal>>
@@ -720,7 +727,7 @@ OnQuorumOfNilPrevotes(p) ==
            /\ evidence' = pv \union evidence
            /\ BroadcastPrecommit(p, round[p], Id(NilProposal))
            /\ step' = [step EXCEPT ![p] = "PRECOMMIT"]
-           /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorVars>>
+           /\ UNCHANGED <<temporalVars, invariantVars, fsmVars, censorshipVars>>
            /\ UNCHANGED <<round, decision, locked_value, locked_round, valid_value, valid_round>>
            /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_timeout,
                           received_timely_proposal, inspected_proposal>>
@@ -771,7 +778,7 @@ UponfPlusOneTimeoutsAny(p) ==
 OnLocalTimerExpire(p) ==
     /\ local_rem_time[p] = 0
     /\ BroadcastTimeout(p, round[p])
-    /\ UNCHANGED <<coreVars, temporalVars, fsmVars, invariantVars, censorVars>>
+    /\ UNCHANGED <<tendermintCoreVars, temporalVars, fsmVars, invariantVars, censorshipVars>>
     /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, evidence,
                    received_timely_proposal, inspected_proposal>>
     /\ action' = "OnLocalTimerExpire"
@@ -784,12 +791,12 @@ AdvanceRealTime ==
     /\ \E t \in Timestamps:
         /\ t > real_time
         /\ real_time' = t
-        /\ local_clock' = [p \in Corr |-> local_clock[p] + (t - real_time)]
-        /\ local_rem_time' = [p \in Corr |->
+        /\ local_clock' = [p \in HonestNodes |-> local_clock[p] + (t - real_time)]
+        /\ local_rem_time' = [p \in HonestNodes |->
                IF local_rem_time[p] > 0 /\ ~\E m \in msgs_propose[round[p]]: m.src = Proposer[round[p]]
                THEN local_rem_time[p] - 1
                ELSE local_rem_time[p]]
-        /\ UNCHANGED <<coreVars, invariantVars, fsmVars, censorVars>>
+        /\ UNCHANGED <<tendermintCoreVars, invariantVars, fsmVars, censorshipVars>>
         /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout, evidence, received_timely_proposal, inspected_proposal>>
         /\ action' = "AdvanceRealTime"
     
@@ -819,38 +826,36 @@ MessageProcessing(p) ==
 
 
 (* ======================== ADVERSARY ACTIONS ================================ *)
-\* Byzantine Data-Withholding Attack: faulty leader broadcasts a structurally
+\* Byzantine Data-Withholding Attack: byzantine leader broadcasts a structurally
 \* valid proposal but sets attestation = FALSE (data is not actually available).
 ByzantineDataWithholding ==
     \E r \in Rounds :
-        /\ Proposer[r] \in Faulty
+        /\ Proposer[r] \in ByzantineNodes
         /\ msgs_propose[r] = {}
         /\ LET
+            expected_fsm_state == CalculateNextFSMState
+
             \* The attacker is hiding DA data.
             bad_da == [
-                published_block_height |-> 999, 
-                attestation |-> FALSE
+                published_block_height  |-> h_engram_verified, 
+                attestation             |-> FALSE
             ]
 
-            \* The attacker created a BTC fork to attack Eclipse.
-            bad_btc  == [
-                checkpoint_block_height |-> h_btc_current,
-                checkpoint_block_hash   |-> <<"BTC_FORK", h_btc_current>>
+            perfect_btc == [
+                checkpoint_block_height |-> h_btc_current, 
+                checkpoint_block_hash   |-> ExpectedBlockHash(h_btc_current) 
             ]
 
-            bad_prop == Proposal("TX_NORMAL", MIN_TIMESTAMP, r, state,
-                                bad_da, bad_btc, FALSE)
+            forced_tx == CHOOSE tx \in forced_tx_queue : TRUE
             
-            bad_msg  == [type       |-> "PROPOSAL",
-                        src         |-> Proposer[r],
-                        round       |-> r,
-                        proposal    |-> bad_prop,
-                        valid_round |-> NilRound]
+            bad_prop == Proposal(forced_tx, real_time, r, expected_fsm_state,
+                                bad_da, perfect_btc, FALSE)
+
            IN
-            /\ msgs_propose' = [msgs_propose EXCEPT ![r] = msgs_propose[r] \union {bad_msg}]
-            /\ UNCHANGED <<coreVars, temporalVars, fsmVars, invariantVars, censorVars>>
+            /\ BroadcastProposal(Proposer[r], r, bad_prop, NilRound)
+            /\ UNCHANGED <<tendermintCoreVars, temporalVars, fsmVars, invariantVars, censorshipVars>>
             /\ UNCHANGED <<msgs_prevote, msgs_precommit, msgs_timeout>>
-            /\ UNCHANGED <<evidence, action, received_timely_proposal, inspected_proposal>>
+            /\ UNCHANGED <<evidence, received_timely_proposal, inspected_proposal>>
             /\ action' = "ByzantineDataWithholding"
 
 
@@ -859,7 +864,7 @@ ByzantineDataWithholding ==
 SubmitToCelestiaDA ==
     \E tx \in ValidValues \ forced_tx_queue :
         /\ forced_tx_queue' = forced_tx_queue \union {tx}
-        /\ UNCHANGED <<coreVars, temporalVars, invariantVars, fsmVars>>
+        /\ UNCHANGED <<tendermintCoreVars, temporalVars, invariantVars, fsmVars>>
         /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout>>
         /\ UNCHANGED <<evidence, received_timely_proposal, inspected_proposal>>
         /\ UNCHANGED <<tx_ignored_rounds>>
@@ -874,7 +879,7 @@ SubmitToCelestiaDA ==
 TendermintNext ==
     \/ AdvanceRealTime
     \/ /\ SynchronizedLocalClocks
-       /\ \E p \in Corr : MessageProcessing(p)
+       /\ \E p \in HonestNodes : MessageProcessing(p)
     \/ ByzantineDataWithholding
     \/ SubmitToCelestiaDA
 
@@ -882,7 +887,7 @@ TendermintNext ==
 (* ======================== SAFETY INVARIANTS =============================== *)
 \* TendermintTypeOK: type domain for all Tendermint-owned variables
 TendermintTypeOK ==
-    /\ \A p \in Corr :
+    /\ \A p \in HonestNodes :
            /\ round[p]       \in Rounds
            /\ step[p]        \in {"PROPOSE", "PREVOTE", "PRECOMMIT", "DECIDED"}
            /\ decision[p]    \in DecisionsOrNil
@@ -895,16 +900,16 @@ TendermintTypeOK ==
            /\ \A m \in msgs_prevote[r]   : m.round = r
            /\ \A m \in msgs_precommit[r] : m.round = r
 
-\* I1: All decided correct processes agree on the same value
+\* I1: All decided honest node (processes) agree on the same value
 AgreementOnValue ==
-    \A p, q \in Corr :
+    \A p, q \in HonestNodes :
         /\ decision[p] /= NilDecision
         /\ decision[q] /= NilDecision
         => decision[p].prop.value = decision[q].prop.value
 
 \* I2: Decided timestamp falls within the consensus round interval
 ConsensusTimeValid ==
-    \A p \in Corr :
+    \A p \in HonestNodes :
         decision[p] /= NilDecision =>
             LET
                 r == decision[p].prop.round
@@ -913,24 +918,24 @@ ConsensusTimeValid ==
             /\ begin_round[r] - PRECISION - DELAY <= t
             /\ t <= end_consensus[p] + PRECISION
 
-\* I3: If the proposer is correct, timestamp >= round begin time
-ConsensusSafeValidCorrProp ==
-    \A p \in Corr :
+\* I3: If the proposer is honest (correst), timestamp >= round begin time
+ConsensusSafeValidHonestNode ==
+    \A p \in HonestNodes :
         decision[p] /= NilDecision =>
             LET
                 pr == decision[p].prop.round
                 t  == decision[p].prop.timestamp
             IN
-            (Proposer[pr] \in Corr) => begin_round[pr] <= t
+            (Proposer[pr] \in HonestNodes) => begin_round[pr] <= t
 
 \* I4: Every decided proposal must pass the application-level validity predicate
 HybridSafety ==
-    \A p \in Corr :
+    \A p \in HonestNodes :
         decision[p] /= NilDecision => IsValidProposal(decision[p].prop)
 
 \* I5: Only valid domain values can be decided (no garbage)
 ExternalValidity ==
-    \A p \in Corr :
+    \A p \in HonestNodes :
         decision[p] /= NilDecision => decision[p].prop.value \in ValidValues
 
 
@@ -955,7 +960,7 @@ Accountability ==
 \* A Sovereign decision (Soft-finality) must never overwrite or conflict with 
 \* a Proposal already anchored to Bitcoin (Hard-finality).
 NoCrossModeDoubleSpending ==
-    \A p \in Corr, q \in Corr :
+    \A p \in HonestNodes, q \in HonestNodes :
         /\ decision[p] /= NilDecision
         /\ decision[q] /= NilDecision
         /\ decision[p].prop.btc_receipt.checkpoint_block_height <= h_btc_anchored
@@ -971,7 +976,7 @@ CoreTendermintInvariant ==
     /\ TendermintTypeOK
     /\ AgreementOnValue
     /\ ConsensusTimeValid
-    /\ ConsensusSafeValidCorrProp
+    /\ ConsensusSafeValidHonestNode
     /\ HybridSafety
     /\ ExternalValidity
     /\ Accountability

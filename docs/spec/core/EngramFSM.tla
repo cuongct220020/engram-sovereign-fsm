@@ -293,7 +293,7 @@ UpdateSensors ==
            THEN TRUE
            ELSE FALSE
     /\ UNCHANGED <<state, safe_blocks>>
-    /\ UNCHANGED <<censorVars>>
+    /\ UNCHANGED <<censorshipVars>>
 
 
 (* ======================== FSM RULE ENGINE ================================= *)
