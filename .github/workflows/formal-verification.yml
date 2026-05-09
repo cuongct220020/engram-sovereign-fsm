@@ -3,10 +3,10 @@ name: TLA+ Formal Verification CI
 on:
   push:
     paths:
-      - 'spec/**'
+      - 'docs/spec/**'
 
 jobs:
-  verify-fsm:
+  setup:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -17,5 +17,38 @@ jobs:
           java-version: '11'
       - name: Download TLA+ Tools
         run: curl -L -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
-      - name: Run TLC Model Checker
-        run: java -jar tla2tools.jar -modelcheck -config spec/EngramFSM.cfg spec/EngramFSM.tla
+      - name: Cache TLA+ Tools
+        uses: actions/cache@v3
+        with:
+          path: tla2tools.jar
+          key: tla-tools-v1.8.0
+
+  verify-server-refinement-safety:
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+      - name: Download TLA+ Tools
+        run: curl -L -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
+      - name: Run TLC Model Checker - ServerRefinement Safety
+        run: java -XX:+UseParallelGC -Xmx4g -jar tla2tools.jar -modelcheck -workers auto -config docs/spec/mc/server/MC_ServerRefinementSafety.cfg docs/spec/mc/server/MC_ServerRefinementSafety.tla
+
+  verify-server-refinement-liveness:
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+      - name: Download TLA+ Tools
+        run: curl -L -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
+      - name: Run TLC Model Checker - ServerRefinement Liveness
+        run: java -XX:+UseParallelGC -Xmx4g -jar tla2tools.jar -modelcheck -workers auto -config docs/spec/mc/server/MC_ServerRefinementLiveness.cfg docs/spec/mc/server/MC_ServerRefinementLiveness.tla
