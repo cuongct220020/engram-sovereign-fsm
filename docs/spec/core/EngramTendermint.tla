@@ -284,20 +284,20 @@ IsValidProposal(prop) ==
         /\ prop.timestamp \in MIN_TIMESTAMP..MAX_TIMESTAMP
         /\ prop.fsm_state = CalculateNextFSMState   \* Cross-check
         
-        \* \* DA Pipeline Check: Data must be available and within the allowed gap
-        \* /\ (prop.fsm_state \in {"ANCHORED", "RECOVERING"}) => 
-        \*     /\ prop.da_receipt.attestation = TRUE
-        \*     /\ prop.da_receipt.published_block_height <= h_engram_current
-        \*     /\ prop.da_receipt.published_block_height >= (h_engram_current - DA_THRESHOLD - da_tol)
+        \* DA Pipeline Check: Data must be available and within the allowed gap
+        /\ (prop.fsm_state \in {"ANCHORED", "RECOVERING"} \/ IsDAHealthy) => 
+            /\ prop.da_receipt.attestation = TRUE
+            /\ prop.da_receipt.published_block_height <= h_engram_current
+            /\ prop.da_receipt.published_block_height >= (h_engram_current - DA_THRESHOLD - da_tol)
 
         \* Settlement Monotonicity & BTC Light Client Hash Check
         /\ prop.btc_receipt.checkpoint_block_height >= (h_btc_current - btc_tol)
         /\ VerifySPVProof(prop.btc_receipt)
 
         \* Economic Circuit Breaker: Halt all cross-chain withdrawals during partition
-        /\ (prop.fsm_state = "SOVEREIGN") => ~ContainsWithdrawal(prop.value)
+        \* /\ (prop.fsm_state = "SOVEREIGN") => ~ContainsWithdrawal(prop.value)
         
-        \* RE-ANCHORING LOGIC: Mandatory ZK-Proof when hysteresis wait is met
+        \* RE-ANCHORING Logic: Mandatory ZK-Proof when hysteresis wait is met
         \* If not met, strict enforcement that no fake ZK-proof is attached.
         /\  IF prop.fsm_state = "RECOVERING" /\ safe_blocks = HYSTERESIS_WAIT 
             THEN VerifyZkProof(prop.zk_proof_ref, prop.da_receipt)
@@ -464,11 +464,13 @@ BroadcastTimeout(pSrc, pRound) ==
 (* ======================== ROUND MANAGEMENT ================================ *)
 \* Increment ignored-round counters for all pending forced transactions
 UpdateIgnoredRounds(p) ==
-    tx_ignored_rounds' = [tx_ignored_rounds EXCEPT ![p] = 
-        [tx \in ValidValues |-> 
-            IF tx \in forced_tx_queue 
-            THEN tx_ignored_rounds[p][tx] + 1 
-            ELSE tx_ignored_rounds[p][tx]
+    tx_ignored_rounds' = [p_idx \in HonestNodes |->
+        [tx \in ValidValues |->
+            IF p_idx = p THEN
+                IF \E m \in msgs_propose[round[p]] : m.proposal.value = tx
+                THEN 0
+                ELSE MinVal(tx_ignored_rounds[p][tx] + 1, MAX_IGNORE_ROUNDS + 1)
+            ELSE tx_ignored_rounds[p_idx][tx]
         ]
     ]
 

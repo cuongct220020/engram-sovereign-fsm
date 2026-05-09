@@ -101,62 +101,62 @@ CanElect(tr, c, Q, state_fsm) ==
 
 (********************* ADOB CORE OPERATIONS ***********************)
 Pull(n) == 
-    LET Q == CHOOSE q \in SUBSET Nodes : IsSQuorum(q) 
+    LET Q == CHOOSE q \in SUBSET Nodes : IsSQuorum(q)
         VirtualRoot == [type |-> "C", cert_round |-> 0, voters |-> {}, btc_anchored |-> 0]
         ValidCaches == {c \in tree : c.type = "C"} \cup {VirtualRoot}
-    IN \E Cmax \in ValidCaches: 
-        /\ CanElect(tree, Cmax, Q, fsm_state)
-        /\ round > local_times[n]
-        /\ local_times' = [s \in Nodes |-> IF s \in Q THEN round ELSE local_times[s]]
-        /\ LET new_E_cache == [
-               type             |-> "E", 
-               cert_round       |-> round, 
-               caller           |-> n, 
-               method           |-> "None", 
-               voters           |-> Q, 
-               btc_anchored     |-> h_btc_current
+    IN \E Cmax \in ValidCaches:
+       /\ CanElect(tree, Cmax, Q, fsm_state)
+       /\ round > local_times[n]
+       /\ local_times' = [s \in Nodes |-> IF s \in Q THEN round ELSE local_times[s]]
+       /\ \E chosen_anchor \in h_btc_anchored..h_btc_current :
+           LET new_E_cache == [ 
+               type             |-> "E",
+               cert_round       |-> round,
+               caller           |-> n,
+               method           |-> "None",
+               voters           |-> Q,
+               btc_anchored     |-> chosen_anchor 
            ]
            IN tree' = tree \cup {new_E_cache}
-        /\ UNCHANGED <<round, rem_time>>
-        /\ UNCHANGED <<fsm_state, h_btc_current, h_btc_anchored>>
+       /\ UNCHANGED <<round, rem_time>>
+       /\ UNCHANGED <<fsm_state, h_btc_current, h_btc_anchored>>
 
 
 Invoke(n, m) == 
-    /\ m \in Method 
+    /\ m \in Method
     /\ \E c \in tree : 
-        /\ c.type = "E" 
-        /\ c.caller = n 
-        /\ c.cert_round = round 
-    /\ LET new_M_cache == [
-           type             |-> "M", 
-           cert_round       |-> round, 
-           caller           |-> n, 
-           method           |-> m, 
-           voters           |-> {n}, 
-           btc_anchored     |-> h_btc_current
-       ]
-       IN tree' = tree \cup {new_M_cache} 
+       /\ c.type = "E"
+       /\ c.caller = n
+       /\ c.cert_round = round
+       /\ \E chosen_anchor \in h_btc_anchored..h_btc_current :
+           LET new_M_cache == [ 
+               type             |-> "M",
+               cert_round       |-> round,
+               caller           |-> n,
+               method           |-> m,
+               voters           |-> {n},
+               btc_anchored     |-> chosen_anchor 
+           ]
+           IN tree' = tree \cup {new_M_cache}
     /\ UNCHANGED <<local_times, round, rem_time>>
     /\ UNCHANGED <<fsm_state, h_btc_current, h_btc_anchored>>
 
 
 Push(n) == 
-    LET Q == CHOOSE q \in SUBSET Nodes : IsSQuorum(q) IN 
     /\ \E c \in tree : 
-        /\ c.type = "M" 
-        /\ c.caller = n 
-        /\ c.cert_round = round 
-    /\ local_times' = [s \in Nodes |-> IF s \in Q THEN round + 1 ELSE local_times[s]] 
-    /\ LET new_C_cache == [
-           type             |-> "C", 
-           cert_round       |-> round, 
-           caller           |-> n, 
-           method           |-> "None", 
-           voters           |-> Q, 
-           btc_anchored     |-> h_btc_current
-       ]
-       IN tree' = tree \cup {new_C_cache}
-    /\ UNCHANGED <<round, rem_time>> 
+       /\ c.type = "M"
+       /\ c.caller = n
+       /\ c.cert_round = round
+       /\ \E chosen_anchor \in h_btc_anchored..h_btc_current :
+           LET new_C_cache == [ 
+               type             |-> "C",
+               cert_round       |-> round,
+               caller           |-> n,
+               voters           |-> {n},
+               btc_anchored     |-> chosen_anchor 
+           ]
+           IN tree' = tree \cup {new_C_cache}
+    /\ UNCHANGED <<local_times, round, rem_time>>
     /\ UNCHANGED <<fsm_state, h_btc_current, h_btc_anchored>>
 
 (********************* OPTIMIZED ENVIRONMENT ******************)

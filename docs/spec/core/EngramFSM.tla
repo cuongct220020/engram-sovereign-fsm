@@ -128,11 +128,6 @@ FSMTypeOK ==
     /\ reanchoring_proof_valid \in BOOLEAN
 
 
-\* SanityCheck: a deliberately-failing invariant used during TLC exploration
-\* to confirm the system can reach RECOVERING (i.e., it does NOT freeze there).
-SanityCheck == state /= "RECOVERING"
-
-
 (* ======================== STATE MACHINE INITIALIZATION ================================== *)
 FSMInit == 
     /\ state = "ANCHORED"
@@ -249,7 +244,7 @@ ChurnBasedRotationAttack ==
     /\ UNCHANGED <<active_peers, peer_latency>>
     /\ action' = "ChurnBasedRotationAttack"
 
-\* TODO: Add attack audit log for TLC trace log
+
 P2PAdversaryAttack ==         
     \/ RelayNodeAttack 
     \/ BGPHijackingAttack
@@ -292,7 +287,7 @@ UpdateSensors ==
               /\ h_btc_submitted' > 0
            THEN TRUE
            ELSE FALSE
-    /\ UNCHANGED <<state, safe_blocks>>
+    /\ UNCHANGED <<state, safe_blocks, suspicious_duration>>
     /\ UNCHANGED <<censorshipVars>>
 
 
@@ -300,34 +295,42 @@ UpdateSensors ==
 \* Pure function: given the current sensor readings, compute the next FSM state.
 \* This is called by EngramServer at every decision point.
 CalculateNextFSMState == 
-    CASE state = "ANCHORED" /\ IsCriticalCondition -> "SOVEREIGN"
-      [] state = "ANCHORED" /\ IsWarningCondition /\ ~IsCriticalCondition -> "SUSPICIOUS"
+    CASE state = "ANCHORED"   /\ IsCriticalCondition -> "SOVEREIGN"
+      [] state = "ANCHORED"   /\ IsWarningCondition /\ ~IsCriticalCondition -> "SUSPICIOUS"
       [] state = "SUSPICIOUS" /\ IsCriticalCondition -> "SOVEREIGN"
-      [] state = "SUSPICIOUS" /\ IsHealthyCondition -> "ANCHORED"
-      [] state = "SOVEREIGN" /\ IsHealthyCondition -> "RECOVERING"
-      [] state = "RECOVERING" /\ IsCriticalCondition -> "SOVEREIGN"
-      [] state = "RECOVERING" /\ IsHealthyCondition /\ safe_blocks = HYSTERESIS_WAIT /\ reanchoring_proof_valid = TRUE -> "ANCHORED"
-      [] state = "RECOVERING" /\ IsHealthyCondition /\ safe_blocks < HYSTERESIS_WAIT -> "RECOVERING"
+      
+      \* Gray Failure Timeout. Force circuit-break if system stays suspicious too long.
+      [] state = "SUSPICIOUS" /\ suspicious_duration >= MAX_SUSPICIOUS_TIME -> "SOVEREIGN"
+      
+      [] state = "SUSPICIOUS" /\ IsHealthyCondition  -> "ANCHORED"
+      [] state = "SOVEREIGN"  /\ IsHealthyCondition  -> "RECOVERING"
+      
+      \* Fallback to SOVEREIGN if network degrades while in RECOVERING
+      [] state = "RECOVERING" /\ ~IsHealthyCondition -> "SOVEREIGN"
+      
+      \* Exit condition when hysteresis and ZK proof are both satisfied
+      [] state = "RECOVERING" /\ IsHealthyCondition  /\ safe_blocks = HYSTERESIS_WAIT /\ reanchoring_proof_valid = TRUE -> "ANCHORED"
+      
+      \* Catch-all for remaining in RECOVERING (covers safe_blocks < HYSTERESIS_WAIT and pending ZK proofs)
+      [] state = "RECOVERING" /\ IsHealthyCondition  -> "RECOVERING"
+      
       [] OTHER -> state
 
 
 \* Action: write the FSM transition and update the hysteresis counter.
 ExecuteFSMTransition(target_state) == 
-    /\ state'       = target_state
+    /\ state' = target_state
     
-    /\ suspicious_duration' = IF target_state = "SUSPICIOUS" /\ state = "SUSPICIOUS" 
-                              THEN suspicious_duration + 1
-                              ELSE IF target_state = "SUSPICIOUS" 
-                                   THEN 1 
-                                   ELSE 0
-                                   
-    /\ safe_blocks' = IF target_state = "RECOVERING" /\ state = "SOVEREIGN" 
-                      THEN 0                   
-                      ELSE IF target_state = "RECOVERING" /\ safe_blocks < HYSTERESIS_WAIT 
-                           THEN safe_blocks + 1  
-                           ELSE IF target_state = "RECOVERING"
-                                THEN safe_blocks
-                                ELSE 0
+    /\ suspicious_duration' = 
+           IF target_state = "SUSPICIOUS" 
+           THEN MinVal(suspicious_duration + 1, MAX_SUSPICIOUS_TIME + 1)
+           ELSE 0
+                                 
+    \* It resets to 0 automatically if transitioning out of RECOVERING or just entering it from SOVEREIGN
+    /\ safe_blocks' = 
+           IF target_state = "RECOVERING" /\ state = "RECOVERING"
+           THEN MinVal(safe_blocks + 1, HYSTERESIS_WAIT)
+           ELSE 0
 
 (* ======================== THE NEXT-STATE ACTION (FOR UNIT TEST) ============ *)
 FSMNext == 

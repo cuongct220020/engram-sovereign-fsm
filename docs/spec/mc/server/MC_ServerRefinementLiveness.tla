@@ -38,6 +38,25 @@ MC_ServerInit == ServerInit
 MC_ServerNext == ServerNext
 
 
+(* ======================== LIVENESS SANITY CHECKS (EXPECTED TO FAIL) ======================== *)
+
+\* EXPECT FAIL: Proves the system eventually enters a critical condition and breaks the circuit.
+Sanity_NeverBreakCircuit == 
+    [] ~(IsCriticalCondition /\ state = "SOVEREIGN")
+
+\* EXPECT FAIL: Proves the system eventually completes hysteresis and fully recovers to ANCHORED.
+Sanity_NeverRecoverFully == 
+    [] ~(state = "ANCHORED" /\ safe_blocks = HYSTERESIS_WAIT)
+
+\* EXPECT FAIL: Proves the Global Stabilisation Time (GST) is actually reached in the trace.
+Sanity_NeverReachGST == 
+    [] ~GSTReached
+
+\* EXPECT FAIL: Proves a transaction is eventually forced into a block due to prolonged censorship.
+Sanity_NeverForceTx == 
+    [] ~(\E p \in HonestNodes, tx \in Method : tx_ignored_rounds[p][tx] >= MAX_IGNORE_ROUNDS)
+
+
 (* ======================== FAIRNESS CONDITIONS ============================ *)
 \* Weak fairness on time advance ensures clocks always eventually tick.
 \* Weak fairness on message processing ensures every enabled action eventually fires (prevents "unfair" stuttering in liveness proofs).

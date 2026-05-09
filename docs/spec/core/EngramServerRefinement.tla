@@ -103,7 +103,7 @@ mapped_fsm_state ==
 mapped_local_times == 
     [ n \in Nodes |-> IF n \in Q_abstract THEN 
         Max( {0} \cup { qc.round + 1 : qc \in { q \in quorum_certs : q.type = "E_QC" } } 
-                 \cup { c.cert_round : c \in MappedCCaches } ) 
+                 \cup { c.cert_round + 1: c \in MappedCCaches } ) 
         ELSE 0 ]
 
 \* Round mapping: the abstract consensus round leads the concrete max round by 1

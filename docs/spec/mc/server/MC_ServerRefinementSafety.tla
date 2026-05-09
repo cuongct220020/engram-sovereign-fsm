@@ -37,19 +37,35 @@ MC_Proposer == [r \in 0..5 |-> MC_NodeSeq[(r % 4) + 1]]
 MC_ServerInit == ServerInit
 MC_ServerNext == ServerNext
 
-(* ======================== SANITY CHECK ==================================== *)
-AttackFiredSanityCheck == 
-    \A r \in Rounds : \A m \in msgs_propose[r] : 
-        m.proposal.da_receipt.attestation = TRUE
 
-\* Make sure no one has voted PREVOTE yet
-CheckPrevote   == \A r \in Rounds : msgs_prevote[r] = FaultyPrevotes(r)
+(* ======================== SAFETY SANITY CHECKS (EXPECTED TO FAIL) ======================== *)
 
-\* Make sure no one has voted PRECOMMIT yet
-CheckPrecommit == \A r \in Rounds : msgs_precommit[r] = FaultyPrecommits(r)
+\* EXPECT FAIL: Proves the FSM successfully explores the SUSPICIOUS warning state.
+Sanity_NeverSuspicious == 
+    \A p \in HonestNodes : 
+        decision[p] /= NilDecision => decision[p].prop.fsm_state /= "SUSPICIOUS"
 
-\* Ensure no one has successfully COMMITTED (DECIDED) yet.
-CheckDecision  == \A p \in MC_Honest : decision[p] = NilDecision
+\* EXPECT FAIL: Proves the Circuit Breaker is triggered and reaches SOVEREIGN.
+Sanity_NeverSovereign == 
+    \A p \in HonestNodes : 
+        decision[p] /= NilDecision => decision[p].prop.fsm_state /= "SOVEREIGN"
+
+\* EXPECT FAIL: Proves the system enters the RECOVERING phase.
+Sanity_NeverRecovering == 
+    \A p \in HonestNodes : 
+        decision[p] /= NilDecision => decision[p].prop.fsm_state /= "RECOVERING"
+
+\* EXPECT FAIL: Proves the Byzantine Data Withholding attack actually fires (E_QC without M_QC).
+Sanity_NoDataWithholding == 
+    \A eqc \in {q \in quorum_certs : q.type = "E_QC"} :
+        \E mqc \in quorum_certs : 
+            /\ mqc.type = "M_QC" 
+            /\ mqc.round = eqc.round 
+            /\ mqc.caller = eqc.caller
+
+\* EXPECT FAIL: Proves the censorship-resistance counter increments under network stress.
+Sanity_NoCensorship == 
+    \A p \in HonestNodes, tx \in Method : tx_ignored_rounds[p][tx] = 0
 
 
 (* ======================== STATE SPACE PRUNING CONSTRAINT ================= *)

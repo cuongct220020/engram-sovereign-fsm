@@ -217,47 +217,45 @@ ServerInit ==
     /\ quorum_certs = {} 
     /\ timeout_certs = {}
 
-ServerAdvanceRealTime ==
-    /\ AdvanceRealTime
+ServerAdvanceRealTime == 
+    /\ AdvanceRealTime 
+    /\ ~\E r \in Rounds :
+           /\ \E eqc \in quorum_certs : eqc.type = "E_QC" /\ eqc.round = r /\ eqc.caller \in ByzantineNodes
+           /\ ~\E mqc \in quorum_certs : mqc.type = "M_QC" /\ mqc.round = r /\ mqc.caller \in ByzantineNodes
     /\ UNCHANGED <<certificateVars, fsmVars>>
+
+ServerByzantinePull == 
+    \E r \in Rounds :
+        /\ Proposer[r] \in ByzantineNodes
+        /\ msgs_propose[r] = {}
+        /\ ~\E q \in quorum_certs : q.type = "E_QC" /\ q.round = r /\ q.caller = Proposer[r]
+        /\ LET new_EQC == [ type |-> "E_QC", round |-> r, caller |-> Proposer[r], btc_anchored |-> h_btc_current ]
+           IN quorum_certs' = quorum_certs \cup {new_EQC}
+        /\ UNCHANGED <<tendermintVars, timeout_certs>>
+
+
+\* ServerByzantineDataWithholding == 
+\*     /\ ByzantineDataWithholding 
+\*     /\ LET r == CHOOSE rnd \in Rounds : msgs_propose[rnd] /= msgs_propose'[rnd]
+\*            m == CHOOSE msg \in msgs_propose'[r] : msg.src = Proposer[r]
+\*        IN 
+\*        \* Toán học LiDO ép buộc: Phải có E_QC từ bước 1 rồi mới được chạy tiếp
+\*        /\ \E eqc \in quorum_certs : eqc.type = "E_QC" /\ eqc.round = r /\ eqc.caller = Proposer[r]
+\*        \* Sinh M_QC để hoàn thiện hồ sơ
+\*        /\ LET new_MQC == [ type |-> "M_QC", round |-> r, caller |-> Proposer[r], method |-> m.proposal.value, btc_anchored |-> h_btc_current ]
+\*           IN quorum_certs' = quorum_certs \cup {new_MQC}
+\*     /\ UNCHANGED <<timeout_certs, fsmVars>>
 
 ServerByzantineDataWithholding == 
     /\ ByzantineDataWithholding 
-    \* Nhịp 1: Chỉ sinh E_QC để khớp đúng 1 bước Pull của LiDO
-    /\ LET r == CHOOSE r \in Rounds : msgs_propose[r] /= msgs_propose'[r]
-           new_EQC == [ 
-                type |-> "E_QC", 
-                round |-> r, 
-                caller |-> Proposer[r], 
-                btc_anchored |-> h_btc_current 
-            ]
-       IN quorum_certs' = quorum_certs \cup {new_EQC}
-    /\ UNCHANGED <<timeout_certs, fsmVars>>
-
-
-ServerByzantineInvoke == 
-    \E r \in Rounds :
+    /\ \E r \in Rounds :
+        /\ msgs_propose[r] /= msgs_propose'[r]
         /\ Proposer[r] \in ByzantineNodes
-        /\ \E m \in msgs_propose[r] : m.src = Proposer[r]
-        /\ \E eqc \in quorum_certs : 
-                /\ eqc.type = "E_QC" 
-                /\ eqc.round = r 
-                /\ eqc.caller = Proposer[r]
-        /\ ~\E mqc \in quorum_certs : 
-                /\ mqc.type = "M_QC" 
-                /\ mqc.round = r 
-                /\ mqc.caller = Proposer[r]
-        \* Nhịp 2: Sinh M_QC để khớp đúng bước Invoke của LiDO
-        /\ LET m == CHOOSE msg \in msgs_propose[r] : msg.src = Proposer[r]
-               new_MQC == [ 
-                    type |-> "M_QC", 
-                    round |-> r, 
-                    caller |-> Proposer[r], 
-                    method |-> m.proposal.value, 
-                    btc_anchored |-> h_btc_current 
-                ]
-           IN quorum_certs' = quorum_certs \cup {new_MQC}
-        /\ UNCHANGED <<tendermintVars, timeout_certs>>
+        \* Toán học LiDO ép buộc: Phải có E_QC từ bước 1 (Pull)
+        /\ \E eqc \in quorum_certs : eqc.type = "E_QC" /\ eqc.round = r /\ eqc.caller = Proposer[r]
+        \* QUAN TRỌNG NHẤT: KHÔNG sinh M_QC tại đây để cố tình tạo lỗ hổng Data Withholding!
+        /\ quorum_certs' = quorum_certs
+    /\ UNCHANGED <<timeout_certs, fsmVars>>
 
 
 ServerNext ==
@@ -271,8 +269,9 @@ ServerNext ==
        /\ UNCHANGED <<evidence, received_timely_proposal, inspected_proposal>>
        /\ action' = "UpdateSensors"
     
+    \/ ServerByzantinePull
     \/ ServerByzantineDataWithholding
-    \/ ServerByzantineInvoke
+    \* \/ ServerByzantineInvoke
 
 ServerSpec == ServerInit /\ [][ServerNext]_serverVars
 
@@ -293,15 +292,15 @@ MonotonicitySafety ==
 \* current FSM and sensor state. These are checked in addition to CoreTendermintInv.
 
 \* Decided FSM state must match the current circuit-breaker state
-FSMStateConsistency ==
-    \A p \in HonestNodes :
-        decision[p] /= NilDecision => decision[p].prop.fsm_state = state
+FSMStateConsistency == 
+    \A p \in HonestNodes : 
+        decision[p] /= NilDecision => decision[p].prop.fsm_state = CalculateNextFSMState
 
 \* DA attestation must be present in any decided ANCHORED or RECOVERING block
-DAReceiptConsistency ==
-    \A p \in HonestNodes :
-        (decision[p] /= NilDecision
-         /\ decision[p].prop.fsm_state \in {"ANCHORED", "RECOVERING"})
+DAReceiptConsistency == 
+    \A p \in HonestNodes : 
+        (decision[p] /= NilDecision /\ 
+        (decision[p].prop.fsm_state \in {"ANCHORED", "RECOVERING"} \/ IsDAHealthy)) 
         => decision[p].prop.da_receipt.attestation = TRUE
 
 \* BTC anchor height in decided proposal must match the current anchored height
