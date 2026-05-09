@@ -28,6 +28,7 @@ go.work.sum
 # env file
 venv/
 .env
+**.DS_Store
 
 # Editor/IDE
 .idea/
@@ -39,6 +40,7 @@ states/
 *_TTrace_*.tla
 *_TTrace_*.bin
 
+*.dot.dump
 
 # Noir execution artifacts
 target/
