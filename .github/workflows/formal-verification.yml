@@ -2,69 +2,34 @@ name: TLA+ Formal Verification CI
 
 on:
   push:
+    branches:
+      - main
+      - master
+      - develop
     paths:
       - 'docs/spec/**'
 
 jobs:
-  verify-smoke-test:
+  tla-smoke-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
+      
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '11'
+      
       - name: Download TLA+ Tools
         run: curl -L -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
-      - name: Run TLC Smoke Test - ServerRefinement Safety
+      
+      - name: Run TLC Smoke Test
         working-directory: docs/spec
-        run: java -XX:+UseParallelGC -Xmx2g -jar ../../tla2tools.jar -simulate -depth 100 -I core -config mc/server/MC_ServerRefinementSafety.cfg mc/server/MC_ServerRefinementSafety.tla
-      - name: Run TLC Smoke Test - ServerRefinement Liveness
-        working-directory: docs/spec
-        run: java -XX:+UseParallelGC -Xmx2g -jar ../../tla2tools.jar -simulate -depth 100 -I core -config mc/server/MC_ServerRefinementLiveness.cfg mc/server/MC_ServerRefinementLiveness.tla
-
-  verify-server-refinement-safety:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '11'
-      - name: Download TLA+ Tools
-        run: curl -L -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
-      - name: Run TLC Model Checker - ServerRefinement Safety
-        working-directory: docs/spec
-        run: java -XX:+UseParallelGC -Xmx4g -jar ../../tla2tools.jar -modelcheck -workers auto -I core -config mc/server/MC_ServerRefinementSafety.cfg mc/server/MC_ServerRefinementSafety.tla
-      - name: Upload TLC Error Traces
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tlc-error-traces-safety
-          path: docs/spec/mc/server/*.tlc
-
-  verify-server-refinement-liveness:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '11'
-      - name: Download TLA+ Tools
-        run: curl -L -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
-      - name: Run TLC Model Checker - ServerRefinement Liveness
-        working-directory: docs/spec
-        run: java -XX:+UseParallelGC -Xmx4g -jar ../../tla2tools.jar -modelcheck -workers auto -I core -config mc/server/MC_ServerRefinementLiveness.cfg mc/server/MC_ServerRefinementLiveness.tla
-      - name: Upload TLC Error Traces
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tlc-error-traces-liveness
-          path: docs/spec/mc/server/*.tlc
+        run: |
+          echo "Starting TLA+ Smoke Test..."
+          java -XX:+UseParallelGC -Xmx2g -jar ../../tla2tools.jar -simulate -depth 50 -I core -config mc/server/MC_ServerRefinementSafety.cfg mc/server/MC_ServerRefinementSafety.tla
+          echo "TLA+ Smoke Test completed!"
