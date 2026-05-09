@@ -68,6 +68,28 @@ Sanity_NoCensorship ==
     \A p \in HonestNodes, tx \in Method : tx_ignored_rounds[p][tx] = 0
 
 
+(* ======================== ABLATION SANITY CHECKS (EXPECTED TO FAIL) ======================== *)
+
+\* EXPECT FAIL: Proves the attacker attempts a withdrawal while in SOVEREIGN or RECOVERING state.
+Sanity_NeverAttemptWithdrawalLeakage ==
+    \A r \in Rounds : \A m \in msgs_propose[r] :
+        (m.proposal.fsm_state \in {"SOVEREIGN", "RECOVERING"}) => (m.proposal.value /= "TX_WITHDRAWAL")
+
+\* EXPECT FAIL: Proves the attacker attempts to propose a block with withheld DA (attestation = FALSE).
+Sanity_NeverProposeWithheldData ==
+    \A r \in Rounds : \A m \in msgs_propose[r] :
+        m.proposal.da_receipt.attestation = TRUE
+
+\* EXPECT FAIL: Proves the attacker attempts a cross-mode double spend using a stale BTC checkpoint.
+Sanity_NeverAttemptCrossModeDoubleSpend ==
+    \A r \in Rounds : \A m \in msgs_propose[r] :
+        (m.proposal.fsm_state = "SOVEREIGN") => (m.proposal.btc_receipt.checkpoint_block_height > h_btc_anchored)
+
+\* EXPECT FAIL: Proves the system experiences a network degradation while accumulating safe_blocks (flapping trigger).
+Sanity_NeverFlapInRecovering ==
+    ~(state = "RECOVERING" /\ safe_blocks > 0 /\ ~IsHealthyCondition)
+
+
 (* ======================== STATE SPACE PRUNING CONSTRAINT ================= *)
 \* Bounds are deliberately tighter than Liveness to keep safety runs tractable.
 StateSpaceLimit ==
