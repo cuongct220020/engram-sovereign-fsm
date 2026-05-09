@@ -4,6 +4,17 @@ on:
   push:
     paths:
       - 'docs/spec/**'
+  workflow_dispatch:
+    inputs:
+      verification_type:
+        description: 'Type of verification to run'
+        required: true
+        default: 'bounded'
+        type: choice
+        options:
+          - bounded
+          - smoke
+          - exhaustive
 
 jobs:
   setup:
@@ -17,15 +28,32 @@ jobs:
           java-version: '11'
       - name: Download TLA+ Tools
         run: curl -L -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
-      - name: Cache TLA+ Tools
-        uses: actions/cache@v4
+  verify-smoke-test:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.verification_type == 'smoke' || github.event.inputs.verification_type == 'bounded'))
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
-          path: tla2tools.jar
-          key: tla-tools-v1.8.0
+          distribution: 'temurin'
+          java-version: '11'
+      - name: Download TLA+ Tools
+        run: curl -L -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
+      - name: Run TLC Smoke Test - ServerRefinement Safety
+        working-directory: docs/spec
+        run: java -XX:+UseParallelGC -Xmx2g -jar ../../tla2tools.jar -simulate -depth 100 -I core -config mc/server/MC_ServerRefinementSafety.cfg mc/server/MC_ServerRefinementSafety.tla
+      - name: Run TLC Smoke Test - ServerRefinement Liveness
+        working-directory: docs/spec
+        run: java -XX:+UseParallelGC -Xmx2g -jar ../../tla2tools.jar -simulate -depth 100 -I core -config mc/server/MC_ServerRefinementLiveness.cfg mc/server/MC_ServerRefinementLiveness.tla
 
   verify-server-refinement-safety:
     needs: setup
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.verification_type == 'bounded' || github.event.inputs.verification_type == 'exhaustive'))
     steps:
       - uses: actions/checkout@v4
       - name: Setup Java
@@ -36,11 +64,37 @@ jobs:
       - name: Download TLA+ Tools
         run: curl -L -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
       - name: Run TLC Model Checker - ServerRefinement Safety
-        run: java -XX:+UseParallelGC -Xmx4g -jar tla2tools.jar -modelcheck -workers auto -config docs/spec/mc/server/MC_ServerRefinementSafety.cfg docs/spec/mc/server/MC_ServerRefinementSafety.tla
+        working-directory: docs/spec
+        run: java -XX:+UseParallelGC -Xmx4g -jar ../../tla2tools.jar -modelcheck -workers auto -I core -config mc/server/MC_ServerRefinementSafety.cfg mc/server/MC_ServerRefinementSafety.tla
+      - name: Upload TLC Error Traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tlc-error-traces-safety
+          path: docs/spec/mc/server/*.tlc
+      - uses: actions/checkout@v4
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+      - name: Download TLA+ Tools
+        run: curl -L -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
+      - name: Run TLC Model Checker - ServerRefinement Safety
+        working-directory: docs/spec
+        run: java -XX:+UseParallelGC -Xmx4g -jar ../../tla2tools.jar -modelcheck -workers auto -I core -config mc/server/MC_ServerRefinementSafety.cfg mc/server/MC_ServerRefinementSafety.tla
+      - name: Upload TLC Error Traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tlc-error-traces-safety
+          path: docs/spec/mc/server/*.tlc
 
   verify-server-refinement-liveness:
     needs: setup
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.verification_type == 'bounded' || github.event.inputs.verification_type == 'exhaustive'))
     steps:
       - uses: actions/checkout@v4
       - name: Setup Java
@@ -51,4 +105,40 @@ jobs:
       - name: Download TLA+ Tools
         run: curl -L -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
       - name: Run TLC Model Checker - ServerRefinement Liveness
-        run: java -XX:+UseParallelGC -Xmx4g -jar tla2tools.jar -modelcheck -workers auto -config docs/spec/mc/server/MC_ServerRefinementLiveness.cfg docs/spec/mc/server/MC_ServerRefinementLiveness.tla
+        working-directory: docs/spec
+        run: java -XX:+UseParallelGC -Xmx4g -jar ../../tla2tools.jar -modelcheck -workers auto -I core -config mc/server/MC_ServerRefinementLiveness.cfg mc/server/MC_ServerRefinementLiveness.tla
+      - name: Upload TLC Error Traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tlc-error-traces-liveness
+          path: docs/spec/mc/server/*.tlc
+
+  verify-exhaustive:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 120  # 2 hours for exhaustive checking
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.verification_type == 'exhaustive'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'  # Use newer Java for better performance
+      - name: Download TLA+ Tools
+        run: curl -L -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
+      - name: Run Exhaustive TLC Model Checker - ServerRefinement Safety
+        working-directory: docs/spec
+        run: java -XX:+UseParallelGC -Xmx8g -jar ../../tla2tools.jar -modelcheck -workers auto -I core -config mc/server/MC_ServerRefinementSafety.cfg mc/server/MC_ServerRefinementSafety.tla
+      - name: Run Exhaustive TLC Model Checker - ServerRefinement Liveness
+        working-directory: docs/spec
+        run: java -XX:+UseParallelGC -Xmx8g -jar ../../tla2tools.jar -modelcheck -workers auto -I core -config mc/server/MC_ServerRefinementLiveness.cfg mc/server/MC_ServerRefinementLiveness.tla
+      - name: Upload TLC States and Traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tlc-exhaustive-results
+          path: |
+            docs/spec/mc/server/*.tlc
+            docs/spec/states/
