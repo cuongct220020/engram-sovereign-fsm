@@ -39,6 +39,8 @@ spec/tla2tools.jar
 states/
 *_TTrace_*.tla
 *_TTrace_*.bin
+*.tla.txt
+*.cfg.txt
 
 *.dot.dump
 

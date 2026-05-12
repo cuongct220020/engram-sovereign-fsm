@@ -22,6 +22,12 @@ CONSTANTS
     RESET_TIME  \* Pacemaker reset time (passed through to EngramConsensus)
 
 
+\* Aggregate tuple for EngramServer
+serverVars ==
+    <<tendermintCoreVars, temporalVars, invariantVars, 
+        bookkeepingVars, certificateVars, fsmVars, networkSensorVars, censorshipVars>>
+
+
 (* ======================== HELPERS ========================================= *)
 \* TRUE once the network has accumulated 2f+1 matching precommits for any value.
 \* Used as a guard to stop issuing new proposals after a block is closed.
@@ -34,7 +40,7 @@ GlobalDecisionExists ==
 
 (* ======================== SERVER HOOKS (INTEGRATION LAYER) ================ *)
 
-\* Hook 1: Leader builds and injects a proposal → emits E_QC (maps to Abstract Pull).
+\* Hook 1: Leader builds and injects a proposal -> emits E_QC (maps to Abstract Pull).
 \*
 \* State-space control: all non-determinism over ValidValues, proof_search_space,
 \* and validValue is resolved HERE, before entering the black-box Tendermint core.
@@ -82,14 +88,14 @@ ServerInsertProposal(p) ==
                           method        |-> "None",
                           btc_anchored  |-> h_btc_current ]
                   IN quorum_certs' = quorum_certs \cup {new_EQC}
-    /\ UNCHANGED <<timeout_certs, fsmVars, censorshipVars>>
-    /\ UNCHANGED <<tendermintCoreVars, temporalVars>>
-    /\ UNCHANGED <<msgs_prevote, msgs_precommit, msgs_timeout,
-                   evidence, received_timely_proposal, inspected_proposal>>
+    /\ UNCHANGED <<timeout_certs>>
+    /\ UNCHANGED <<tendermintCoreVars, temporalVars, propAuditVars>>
+    /\ UNCHANGED <<fsmVars, networkSensorVars, censorshipVars>>
+    /\ UNCHANGED <<msgs_prevote, msgs_precommit, msgs_timeout, evidence>>
     /\ action' = "ServerInsertProposal"
 
 
-\* Hook 2: Proposer votes for its own proposal → emits M_QC (maps to Abstract Invoke).
+\* Hook 2: Proposer votes for its own proposal -> emits M_QC (maps to Abstract Invoke).
 ServerProposerVotes(p) ==
     /\ \/ UponProposalInPropose(p)
        \/ UponProposalInProposeAndPrevote(p)
@@ -138,24 +144,24 @@ ServerUponProposalInPrecommitNoDecision(p) ==
            \* Mark proof as submitted (pending Bitcoin confirmation).
            /\ IF prop.fsm_state = "RECOVERING" /\ prop.zk_proof_ref = TRUE
               THEN
-                  /\ h_btc_submitted'        = h_btc_current
+                  /\ h_btc_submitted' = h_btc_current
                   /\ reanchoring_proof_valid' = FALSE   \* Awaiting Bitcoin confirmation
               ELSE
-                  /\ h_btc_submitted'        = h_btc_submitted
+                  /\ h_btc_submitted' = h_btc_submitted
                   /\ reanchoring_proof_valid' = reanchoring_proof_valid
 
            \* Step 5: Force-sync local sensors when ANCHORED.
            \* If the network majority is in ANCHORED, suppress any local false alarms.
            /\ IF prop.fsm_state = "ANCHORED"
               THEN
-                  /\ h_btc_current'    = prop.btc_receipt.checkpoint_block_height
+                  /\ h_btc_current' = prop.btc_receipt.checkpoint_block_height
                   /\ h_engram_current' = prop.da_receipt.published_block_height
-                  /\ is_das_failed'    = FALSE
+                  /\ is_das_failed' = FALSE
               ELSE
                   \* Otherwise let the FSM sensors evolve independently.
                   /\ UNCHANGED <<h_btc_current, h_engram_current, is_das_failed>>
 
-           /\ UNCHANGED <<p2pSensorVars>>
+           /\ UNCHANGED <<p2pHealthSensorVars>>
 
     \* Step 6: Keep pacemaker certificates and censorship sensor unchanged
     /\ UNCHANGED <<certificateVars, censorshipVars>>
@@ -179,13 +185,13 @@ ServerUponTimeoutCert(p) ==
                btc_anchored |-> h_btc_current ]
         IN timeout_certs' = timeout_certs \cup {new_TQC}
 
-    /\ UNCHANGED <<quorum_certs, fsmVars>>
+    /\ UNCHANGED <<quorum_certs, fsmVars, networkSensorVars>>
     /\ UNCHANGED <<forced_tx_queue>>
     /\ UNCHANGED <<local_clock, real_time>>
     /\ UNCHANGED <<end_consensus, proposal_time, proposal_received_time>>
     /\ UNCHANGED <<decision, locked_value, locked_round, valid_value, valid_round>>
-    /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout>>
-    /\ UNCHANGED <<evidence, received_timely_proposal, inspected_proposal>>
+    /\ UNCHANGED <<msgsBroadcastVars, propAuditVars>>
+    /\ UNCHANGED <<evidence>>
     /\ action' = "ServerUponTimeoutCert"
 
 
@@ -202,10 +208,12 @@ ServerPassThrough(p) ==
     \/ OnQuorumOfNilPrevotes(p)
     \/ OnRoundCatchup(p)
     \/ UponfPlusOneTimeoutsAny(p)
+    \/ OnLocalTimerExpire(p)
 
 ServerMessageProcessing(p) ==
     \/ /\ ServerPassThrough(p)
-       /\ UNCHANGED <<certificateVars, fsmVars>>
+       /\ ServerUponTimeoutCert(p) 
+       /\ UNCHANGED <<certificateVars, fsmVars, networkSensorVars>>
     \/ ServerInsertProposal(p)
     \/ ServerProposerVotes(p)
 
@@ -222,56 +230,52 @@ ServerAdvanceRealTime ==
     /\ ~\E r \in Rounds :
            /\ \E eqc \in quorum_certs : eqc.type = "E_QC" /\ eqc.round = r /\ eqc.caller \in ByzantineNodes
            /\ ~\E mqc \in quorum_certs : mqc.type = "M_QC" /\ mqc.round = r /\ mqc.caller \in ByzantineNodes
-    /\ UNCHANGED <<certificateVars, fsmVars>>
+    /\ \/ /\ UpdateSensors
+          /\ UNCHANGED <<certificateVars>>
+       \/ /\ UNCHANGED <<certificateVars, fsmVars, networkSensorVars>>
 
 ServerByzantinePull == 
     \E r \in Rounds :
         /\ Proposer[r] \in ByzantineNodes
         /\ msgs_propose[r] = {}
         /\ ~\E q \in quorum_certs : q.type = "E_QC" /\ q.round = r /\ q.caller = Proposer[r]
-        /\ LET new_EQC == [ type |-> "E_QC", round |-> r, caller |-> Proposer[r], btc_anchored |-> h_btc_current ]
+        /\ LET new_EQC == [ 
+                type |-> "E_QC", 
+                round |-> r, 
+                caller |-> Proposer[r], 
+                btc_anchored |-> h_btc_current 
+            ]
            IN quorum_certs' = quorum_certs \cup {new_EQC}
-        /\ UNCHANGED <<tendermintVars, timeout_certs>>
+        /\ UNCHANGED <<tendermintCoreVars, timeout_certs>>
+        /\ UNCHANGED <<temporalVars, bookkeepingVars, invariantVars>>
+        /\ UNCHANGED <<fsmVars, networkSensorVars, censorshipVars>>
 
-
-\* ServerByzantineDataWithholding == 
-\*     /\ ByzantineDataWithholding 
-\*     /\ LET r == CHOOSE rnd \in Rounds : msgs_propose[rnd] /= msgs_propose'[rnd]
-\*            m == CHOOSE msg \in msgs_propose'[r] : msg.src = Proposer[r]
-\*        IN 
-\*        \* Toán học LiDO ép buộc: Phải có E_QC từ bước 1 rồi mới được chạy tiếp
-\*        /\ \E eqc \in quorum_certs : eqc.type = "E_QC" /\ eqc.round = r /\ eqc.caller = Proposer[r]
-\*        \* Sinh M_QC để hoàn thiện hồ sơ
-\*        /\ LET new_MQC == [ type |-> "M_QC", round |-> r, caller |-> Proposer[r], method |-> m.proposal.value, btc_anchored |-> h_btc_current ]
-\*           IN quorum_certs' = quorum_certs \cup {new_MQC}
-\*     /\ UNCHANGED <<timeout_certs, fsmVars>>
 
 ServerByzantineDataWithholding == 
     /\ ByzantineDataWithholding 
-    /\ \E r \in Rounds :
-        /\ msgs_propose[r] /= msgs_propose'[r]
-        /\ Proposer[r] \in ByzantineNodes
-        \* Toán học LiDO ép buộc: Phải có E_QC từ bước 1 (Pull)
-        /\ \E eqc \in quorum_certs : eqc.type = "E_QC" /\ eqc.round = r /\ eqc.caller = Proposer[r]
-        \* QUAN TRỌNG NHẤT: KHÔNG sinh M_QC tại đây để cố tình tạo lỗ hổng Data Withholding!
-        /\ quorum_certs' = quorum_certs
-    /\ UNCHANGED <<timeout_certs, fsmVars>>
+    /\ LET r == CHOOSE rnd \in Rounds : msgs_propose[rnd] /= msgs_propose'[rnd]
+           m == CHOOSE msg \in msgs_propose'[r] : msg.src = Proposer[r]
+       IN 
+       \* Toán học LiDO ép buộc: Phải có E_QC từ bước 1 rồi mới được chạy tiếp
+       /\ \E eqc \in quorum_certs : eqc.type = "E_QC" /\ eqc.round = r /\ eqc.caller = Proposer[r]
+       \* Sinh M_QC để hoàn thiện hồ sơ
+       /\ LET new_MQC == [ 
+                type |-> "M_QC", 
+                round |-> r, 
+                caller |-> Proposer[r], 
+                method |-> m.proposal.value, 
+                btc_anchored |-> h_btc_current 
+            ]
+          IN quorum_certs' = quorum_certs \cup {new_MQC}
+    /\ UNCHANGED <<timeout_certs, fsmVars, networkSensorVars>>
 
 
 ServerNext ==
     \/ ServerAdvanceRealTime
     \/ /\ SynchronizedLocalClocks
        /\ \E p \in HonestNodes : ServerMessageProcessing(p)
-    
-    \/ /\ UpdateSensors
-       /\ UNCHANGED <<tendermintCoreVars, temporalVars, invariantVars, censorshipVars, certificateVars>>
-       /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout>>
-       /\ UNCHANGED <<evidence, received_timely_proposal, inspected_proposal>>
-       /\ action' = "UpdateSensors"
-    
     \/ ServerByzantinePull
     \/ ServerByzantineDataWithholding
-    \* \/ ServerByzantineInvoke
 
 ServerSpec == ServerInit /\ [][ServerNext]_serverVars
 

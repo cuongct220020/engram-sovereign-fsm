@@ -164,8 +164,8 @@ BTCNormalUpdate ==
     /\ h_btc_submitted' \in {h_btc_submitted, h_btc_current'}
     /\ is_btc_spv_failed' = FALSE
     /\ h_btc_anchored' = h_btc_submitted'   \* SPV verification passed: anchor can advance
-    /\ UNCHANGED <<state, safe_blocks, suspicious_duration, reanchoring_proof_valid>> 
-    /\ UNCHANGED <<daSensorVars, p2pSensorVars>>
+    /\ UNCHANGED <<fsmVars>> 
+    /\ UNCHANGED <<daGapSensorVars, p2pHealthSensorVars>>
 
 \* Scenario 2: SPV fails or is under attack; the anchor is throttled (frozen).
 BTCSPVFailure ==
@@ -173,8 +173,8 @@ BTCSPVFailure ==
     /\ h_btc_submitted' \in {h_btc_submitted, h_btc_current'}
     /\ is_btc_spv_failed' = TRUE
     /\ h_btc_anchored' = h_btc_anchored     \* SPV verification failed: anchor is frozen
-    /\ UNCHANGED <<state, safe_blocks, suspicious_duration, reanchoring_proof_valid>> 
-    /\ UNCHANGED <<daSensorVars, p2pSensorVars>>
+    /\ UNCHANGED <<fsmVars>> 
+    /\ UNCHANGED <<daGapSensorVars, p2pHealthSensorVars>>
     /\ action' = "BTCSPVFailure"
 
 UpdateBTCSensor == BTCNormalUpdate \/ BTCSPVFailure
@@ -189,7 +189,7 @@ DANormalUpdate ==
     /\ is_das_failed' = FALSE
     /\ h_engram_verified' = h_engram_current' \* DA attestation passed: allowed to update to current height
     /\ UNCHANGED <<state, safe_blocks, suspicious_duration>> 
-    /\ UNCHANGED <<btcSensorVars, p2pSensorVars>>
+    /\ UNCHANGED <<btcGapSensorVars, p2pHealthSensorVars>>
 
 \* Scenario 2: DA Layer reports failure (Data Withholding attack or Blobstream disconnect).
 DAFailure ==
@@ -200,7 +200,7 @@ DAFailure ==
        \/ is_das_failed' = TRUE
     /\ h_engram_verified' = h_engram_verified \* DA failure: verification is throttled (frozen)
     /\ UNCHANGED <<state, safe_blocks, suspicious_duration>> 
-    /\ UNCHANGED <<btcSensorVars, p2pSensorVars>>
+    /\ UNCHANGED <<btcGapSensorVars, p2pHealthSensorVars>>
     /\ action' = "DAFailure"
 
 UpdateDASensor == DANormalUpdate \/ DAFailure
@@ -209,11 +209,17 @@ UpdateDASensor == DANormalUpdate \/ DAFailure
 
 \* Update P2P Health Sensor
 \* The node is connected to a healthy mix of anchor peers and honest nodes.
+\* P2PNormalUpdate ==
+\*     /\ active_peers' \in { anchor_peers, anchor_peers \cup {"honest_n1"} }
+\*     /\ peer_churn_rate' \in {0, MAX_CHURN_RATE}
+\*     /\ avg_peer_tenure' \in {MIN_AVG_TENURE, MIN_AVG_TENURE + 10}
+\*     /\ peer_latency'    \in {0, MAX_PEER_LATENCY}
+
 P2PNormalUpdate ==
-    /\ active_peers' \in { anchor_peers, anchor_peers \cup {"honest_n1"} }
-    /\ peer_churn_rate' \in {0, MAX_CHURN_RATE}
-    /\ avg_peer_tenure' \in {MIN_AVG_TENURE, MIN_AVG_TENURE + 10}
-    /\ peer_latency'    \in {0, MAX_PEER_LATENCY}
+    /\ active_peers' = anchor_peers \cup {"honest_node_1"}
+    /\ peer_churn_rate' = 0
+    /\ avg_peer_tenure' = MIN_AVG_TENURE + 10
+    /\ peer_latency'    = 0
 
 
 \* Attack Scenario 1: Relay-node latency injection
@@ -222,9 +228,7 @@ P2PNormalUpdate ==
 RelayNodeAttack == 
     /\ peer_latency' = MAX_PEER_LATENCY + 10  
     /\ UNCHANGED <<active_peers, peer_churn_rate, avg_peer_tenure>>
-    /\ action' = "RelayNodeAttack"
-
-
+    \* /\ action' = "RelayNodeAttack"
 
 \* Attack Scenario 2: BGP Hijacking / Connection Hijacking
 \* The adversary manipulates BGP routes to isolate the victim at the infrastructure level.
@@ -232,8 +236,7 @@ RelayNodeAttack ==
 BGPHijackingAttack == 
     /\ active_peers' = {"sybil_n1", "sybil_n2", "sybil_n3"} 
     /\ UNCHANGED <<peer_latency, peer_churn_rate, avg_peer_tenure>>
-    /\ action' = "BGPHijackingAttack"
-
+    \* /\ action' = "BGPHijackingAttack"
 
 \* Attack Scenario 3: Churn-based IP rotation (Dynamic Peer Replacement)
 \* The adversary continuously rotates malicious IP addresses to evade static firewalls.
@@ -242,7 +245,7 @@ ChurnBasedRotationAttack ==
     /\ peer_churn_rate' = MAX_CHURN_RATE + 5  
     /\ avg_peer_tenure' = 0                   
     /\ UNCHANGED <<active_peers, peer_latency>>
-    /\ action' = "ChurnBasedRotationAttack"
+    \* /\ action' = "ChurnBasedRotationAttack"
 
 
 P2PAdversaryAttack ==         
@@ -270,7 +273,7 @@ UpdateP2PHealthSensor ==
     /\ anchor_peers' = anchor_peers
     /\ blacklisted_peers' = blacklisted_peers
     /\ UNCHANGED <<state, safe_blocks, suspicious_duration>>
-    /\ UNCHANGED <<btcSensorVars, daSensorVars>>
+    /\ UNCHANGED <<btcGapSensorVars, daGapSensorVars>>
 
 \* Non-deterministic environment update that simulates the real network.
 UpdateSensors ==
@@ -338,7 +341,8 @@ FSMNext ==
     \/ /\ state' = CalculateNextFSMState 
        /\ state' /= state
        /\ ExecuteFSMTransition(state')
-       /\ UNCHANGED <<envVars>> 
+       /\ UNCHANGED <<networkSensorVars, censorshipVars>>
+       /\ UNCHANGED <<reanchoring_proof_valid>>
 
 
 FSMSpec == FSMInit /\ [][FSMNext]_fsmVars

@@ -3,9 +3,6 @@
  * EngramVars — Shared Variable Declarations
  *
  * This module declares ALL variables used across the Engram specification.
- * It is the single source of truth for variable groupings (tuples) that are
- * referenced in UNCHANGED clauses and WF_vars fairness conditions throughout
- * EngramFSM, EngramTendermint, and EngramServer.
  *)
 
 CONSTANTS
@@ -20,12 +17,12 @@ VARIABLES
     step,           \* Current step: "PROPOSE" | "PREVOTE" | "PRECOMMIT" | "DECIDED"
     decision,       \* Decided value (NilDecision if not yet decided)
     locked_value,   \* Value locked by the process in the last lock round
-    locked_round,    \* Round in which locked_value was locked
-    valid_value,     \* Most recent valid proposal seen
-    valid_round      \* Round in which valid_value was observed
+    locked_round,   \* Round in which locked_value was locked
+    valid_value,    \* Most recent valid proposal seen
+    valid_round     \* Round in which valid_value was observed
 
 tendermintCoreVars == <<round, step, decision, 
-                            locked_value, locked_round, valid_value, valid_round>>
+                        locked_value, locked_round, valid_value, valid_round>>
 
 
 (* ======================== TEMPORAL / CLOCK VARIABLES ======================= *)
@@ -50,10 +47,16 @@ VARIABLES
     received_timely_proposal,   \* Per-process set of timely proposal messages
     inspected_proposal          \* Per-(round,process) timestamp of last inspection
 
-bookkeepingVars ==
-    <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout,
-      evidence, action, received_timely_proposal, inspected_proposal>>
+\* Small group 1: messsage broadcast
+msgsBroadcastVars == <<msgs_propose, msgs_prevote, msgs_precommit, msgs_timeout>>
 
+\* Small group 2: Auditing proposal
+propAuditVars == <<received_timely_proposal, inspected_proposal>>
+
+\* Small group 3: trace and evidence
+traceVars == <<evidence, action>>
+
+bookkeepingVars == <<msgsBroadcastVars, propAuditVars, traceVars>>
 
 (* ======================== INVARIANT SUPPORT VARIABLES ====================== *)
 \* Ghost variables used exclusively to express timing invariants.
@@ -61,16 +64,16 @@ bookkeepingVars ==
 VARIABLES
     begin_round,            \* Earliest local clock when any process entered round r
     end_consensus,          \* Local clock when process p decided
-    last_begin_round,        \* Latest local clock when any process entered round r
+    last_begin_round,       \* Latest local clock when any process entered round r
     proposal_time,          \* Real time at which the proposal for round r was broadcast
-    proposal_received_time   \* Real time at which the first timely proposal was received
+    proposal_received_time  \* Real time at which the first timely proposal was received
 
 invariantVars == 
     <<begin_round, end_consensus, last_begin_round, 
         proposal_time, proposal_received_time>>
 
 
-(* ======================== P2P HEALTH SENSOR ================================ *)
+(* ======================== P2P HEALTH / DA GAP / BTC GAP SENSOR ================================ *)
 VARIABLES 
     active_peers,            \* Set of currently connected peers
     anchor_peers,            \* Statically configured bootstrap/anchor peer set
@@ -79,28 +82,30 @@ VARIABLES
     avg_peer_tenure,         \* Average age of current connections
     peer_latency             \* Average block/heartbeat transmission latency
 
-p2pSensorVars == 
+p2pHealthSensorVars == 
     <<active_peers, anchor_peers, blacklisted_peers, 
         peer_churn_rate, avg_peer_tenure, peer_latency>>
 
 
-(* ======================== DA SENSOR ======================================== *)
 VARIABLES 
     h_engram_current,           \* Latest Engram chain block height
     h_engram_verified,          \* Last DA-verified Engram block height
     is_attestation_failed,      \* DA attestation failure flag from Blobstream
     is_das_failed               \* Data availability sampling failure flag
 
-daSensorVars == <<h_engram_current, h_engram_verified, is_attestation_failed, is_das_failed>>
+daGapSensorVars == <<h_engram_current, h_engram_verified, is_attestation_failed, is_das_failed>>
 
-(* ======================== BTC FINALITY GAP SENSOR ========================== *)
+
 VARIABLES
     h_btc_current,              \* Latest observed Bitcoin block height
     h_btc_submitted,            \* Height at which the ZK re-anchoring proof was submitted
     h_btc_anchored,             \* Last confirmed Engram checkpoint height on Bitcoin
     is_btc_spv_failed           \* OP_RETURN inclusion check & Block header verification failure flag
 
-btcSensorVars == <<h_btc_current, h_btc_submitted, h_btc_anchored, is_btc_spv_failed>>
+btcGapSensorVars == <<h_btc_current, h_btc_submitted, h_btc_anchored, is_btc_spv_failed>>
+
+\* All environmental sensors
+networkSensorVars == <<p2pHealthSensorVars, daGapSensorVars, btcGapSensorVars>>
 
 
 (* ======================== FSM VARIABLES ====================== *)
@@ -112,9 +117,7 @@ VARIABLES
     reanchoring_proof_valid  \* Boolean: ZK re-anchoring proof confirmed on-chain
 
 \* Top-level FSM tuple consumed by EngramTendermint actions
-fsmVars ==
-    <<state, safe_blocks, suspicious_duration, reanchoring_proof_valid, 
-        btcSensorVars, daSensorVars, p2pSensorVars>>
+fsmVars == <<state, safe_blocks, suspicious_duration, reanchoring_proof_valid>>
 
 
 (* ======================== CENSORSHIP VARIABLES ======================= *)
@@ -124,13 +127,8 @@ VARIABLES
 
 censorshipVars == <<forced_tx_queue, tx_ignored_rounds>>
 
-\* Environment-only tuple consumed by EngramFSM (excludes consensus state)
-envVars ==
-    <<btcSensorVars, daSensorVars, p2pSensorVars,
-      censorshipVars, reanchoring_proof_valid>>
 
-
-(* ======================== SERVER / LIDO CERTIFICATE VARIABLES ============== *)
+(* ======================== LIDO CERTIFICATE VARIABLES ============== *)
 \* Abstract pacemaker certificates used by EngramServer and the LiDO refinement.
 VARIABLES
     quorum_certs,       \* Set of Quorum Certificates (E_QC, M_QC)
@@ -138,15 +136,5 @@ VARIABLES
 
 \* Tuple of consensus certificates (LiDO Certificates)
 certificateVars == <<quorum_certs, timeout_certs>>
-
-\* Aggregate tuple for EngramTendermint (UNCHANGED / WF_vars references)
-tendermintVars ==
-    <<tendermintCoreVars, temporalVars, bookkeepingVars,
-      invariantVars, fsmVars, censorshipVars>>
-
-\* Aggregate tuple for EngramServer
-serverVars ==
-    <<tendermintCoreVars, temporalVars, invariantVars, 
-        bookkeepingVars, certificateVars, fsmVars, censorshipVars>>
 
 =========================================================================
