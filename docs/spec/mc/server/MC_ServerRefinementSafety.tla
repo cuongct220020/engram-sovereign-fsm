@@ -96,10 +96,10 @@ StateSpaceLimit ==
     \* Tendermint bounds
     /\ \A n \in MC_Honest : round[n] <= MAX_ROUND
     /\ real_time <= MAX_TIMESTAMP
-
-    \* Chain height bounds (monotone by construction, but TLC needs explicit caps)
     /\ h_btc_current <= MAX_BTC_HEIGHT
     /\ h_engram_current <= MAX_ENGRAM_HEIGHT
+
+    \* Chain height bounds (monotone by construction, but TLC needs explicit caps)
     /\ h_engram_verified <= h_engram_current
     /\ h_btc_submitted <= h_btc_current
     /\ h_btc_anchored <= h_btc_submitted
@@ -108,15 +108,47 @@ StateSpaceLimit ==
     /\ Cardinality(active_peers) \in {2, 3}
     /\ Cardinality(anchor_peers) <= 3
     /\ Cardinality(blacklisted_peers) <= 2
-    /\ peer_churn_rate <= MAX_CHURN_RATE + 2
-    /\ avg_peer_tenure <= MIN_AVG_TENURE + 100
-    /\ peer_latency <= MAX_PEER_LATENCY + 10
+    /\ peer_churn_rate \in {0, MAX_CHURN_RATE} 
+    /\ avg_peer_tenure \in {MIN_AVG_TENURE, MIN_AVG_TENURE + 2} 
+    /\ peer_latency \in {0, MAX_PEER_LATENCY}
 
     /\ is_btc_spv_failed \in BOOLEAN
     /\ is_das_failed \in BOOLEAN
     /\ is_attestation_failed \in BOOLEAN
     /\ state \in {"ANCHORED", "SUSPICIOUS", "SOVEREIGN", "RECOVERING"}
 
+
+
+(* ======================== TRACE LOG FILTER (FLAT MINIMALIST) ======================== *)
+MyTraceView == 
+    [
+        _1_action |-> action,
+        _2_fsm    |-> state,
+        
+        _3_sensors |-> [ 
+            btc_gap    |-> h_btc_current - h_btc_anchored, 
+            spv_failed |-> is_btc_spv_failed,
+            da_failed  |-> is_das_failed, 
+            peers      |-> active_peers 
+        ],
+
+        _4_proposals |-> { [
+            round           |-> m.round,
+            src             |-> m.src, 
+            da_valid        |-> m.proposal.da_receipt.attestation, 
+            btc_anchored    |-> m.proposal.btc_receipt.checkpoint_block_height
+        ] : m \in UNION {msgs_propose[r] : r \in 0..MAX_ROUND} },
+
+        _5_decisions |-> [p \in HonestNodes |-> 
+                            IF decision[p] = NilDecision THEN "PENDING"
+                            ELSE decision[p].prop.value],
+
+        _6_prevotes  |-> { [
+            round |-> m.round, 
+            src   |-> m.src, 
+            vote  |-> m.id.value
+        ] : m \in UNION {msgs_prevote[r] : r \in 0..MAX_ROUND} }
+    ]
 
 (* ======================== REFINEMENT PROPERTIES ========================== *)
 RefinementSafety   == AbstractConsensus!Safety
