@@ -164,8 +164,8 @@ BTCNormalUpdate ==
     /\ h_btc_submitted' \in {h_btc_submitted, h_btc_current'}
     /\ is_btc_spv_failed' = FALSE
     /\ h_btc_anchored' = h_btc_submitted'   \* SPV verification passed: anchor can advance
-    /\ UNCHANGED <<fsmVars>> 
-    /\ UNCHANGED <<daGapSensorVars, p2pHealthSensorVars>>
+    \* /\ UNCHANGED <<fsmVars>> 
+    \* /\ UNCHANGED <<daGapSensorVars, p2pHealthSensorVars>>
 
 \* Scenario 2: SPV fails or is under attack; the anchor is throttled (frozen).
 BTCSPVFailure ==
@@ -173,9 +173,9 @@ BTCSPVFailure ==
     /\ h_btc_submitted' \in {h_btc_submitted, h_btc_current'}
     /\ is_btc_spv_failed' = TRUE
     /\ h_btc_anchored' = h_btc_anchored     \* SPV verification failed: anchor is frozen
-    /\ UNCHANGED <<fsmVars>> 
-    /\ UNCHANGED <<daGapSensorVars, p2pHealthSensorVars>>
-    /\ action' = "BTCSPVFailure"
+    \* /\ UNCHANGED <<fsmVars>> 
+    \* /\ UNCHANGED <<daGapSensorVars, p2pHealthSensorVars>>
+
 
 UpdateBTCSensor == BTCNormalUpdate \/ BTCSPVFailure
 
@@ -188,8 +188,8 @@ DANormalUpdate ==
     /\ is_attestation_failed' = FALSE
     /\ is_das_failed' = FALSE
     /\ h_engram_verified' = h_engram_current' \* DA attestation passed: allowed to update to current height
-    /\ UNCHANGED <<state, safe_blocks, suspicious_duration>> 
-    /\ UNCHANGED <<btcGapSensorVars, p2pHealthSensorVars>>
+    \* /\ UNCHANGED <<state, safe_blocks, suspicious_duration>> 
+    \* /\ UNCHANGED <<btcGapSensorVars, p2pHealthSensorVars>>
 
 \* Scenario 2: DA Layer reports failure (Data Withholding attack or Blobstream disconnect).
 DAFailure ==
@@ -199,9 +199,9 @@ DAFailure ==
     /\ \/ is_attestation_failed' = TRUE
        \/ is_das_failed' = TRUE
     /\ h_engram_verified' = h_engram_verified \* DA failure: verification is throttled (frozen)
-    /\ UNCHANGED <<state, safe_blocks, suspicious_duration>> 
-    /\ UNCHANGED <<btcGapSensorVars, p2pHealthSensorVars>>
-    /\ action' = "DAFailure"
+    \* /\ UNCHANGED <<state, safe_blocks, suspicious_duration>> 
+    \* /\ UNCHANGED <<btcGapSensorVars, p2pHealthSensorVars>>
+
 
 UpdateDASensor == DANormalUpdate \/ DAFailure
 
@@ -228,7 +228,7 @@ P2PNormalUpdate ==
 RelayNodeAttack == 
     /\ peer_latency' = MAX_PEER_LATENCY + 10  
     /\ UNCHANGED <<active_peers, peer_churn_rate, avg_peer_tenure>>
-    \* /\ action' = "RelayNodeAttack"
+
 
 \* Attack Scenario 2: BGP Hijacking / Connection Hijacking
 \* The adversary manipulates BGP routes to isolate the victim at the infrastructure level.
@@ -236,7 +236,7 @@ RelayNodeAttack ==
 BGPHijackingAttack == 
     /\ active_peers' = {"sybil_n1", "sybil_n2", "sybil_n3"} 
     /\ UNCHANGED <<peer_latency, peer_churn_rate, avg_peer_tenure>>
-    \* /\ action' = "BGPHijackingAttack"
+
 
 \* Attack Scenario 3: Churn-based IP rotation (Dynamic Peer Replacement)
 \* The adversary continuously rotates malicious IP addresses to evade static firewalls.
@@ -245,7 +245,6 @@ ChurnBasedRotationAttack ==
     /\ peer_churn_rate' = MAX_CHURN_RATE + 5  
     /\ avg_peer_tenure' = 0                   
     /\ UNCHANGED <<active_peers, peer_latency>>
-    \* /\ action' = "ChurnBasedRotationAttack"
 
 
 P2PAdversaryAttack ==         
@@ -272,24 +271,56 @@ UpdateP2PHealthSensor ==
     /\ (P2PNormalUpdate \/ P2PAdversaryAttack)
     /\ anchor_peers' = anchor_peers
     /\ blacklisted_peers' = blacklisted_peers
-    /\ UNCHANGED <<state, safe_blocks, suspicious_duration>>
-    /\ UNCHANGED <<btcGapSensorVars, daGapSensorVars>>
+    \* /\ UNCHANGED <<state, safe_blocks, suspicious_duration>>
+    \* /\ UNCHANGED <<btcGapSensorVars, daGapSensorVars>>
 
-\* Non-deterministic environment update that simulates the real network.
-UpdateSensors ==
-    /\ 
-        \/ UpdateBTCSensor
-        \/ UpdateDASensor
-        \/ UpdateP2PHealthSensor
+\* \* Non-deterministic environment update that simulates the real network.
+\* UpdateSensors ==
+\*     \* /\ 
+\*     \*     \/ UpdateBTCSensor
+\*     \*     \/ UpdateDASensor
+\*     \*     \/ UpdateP2PHealthSensor
+
+\*     /\ UpdateBTCSensor
+\*     /\ UpdateDASensor
+\*     /\ UpdateP2PHealthSensor
     
-    \* ZK re-anchoring proof validity
-    \* Proof becomes valid only once the Bitcoin anchor has caught up to the submission height (i.e., the OP_RETURN tx is confirmed).
-    /\ reanchoring_proof_valid' =
-           IF state = "RECOVERING"
-              /\ h_btc_anchored' >= h_btc_submitted'
-              /\ h_btc_submitted' > 0
-           THEN TRUE
-           ELSE FALSE
+\*     \* ZK re-anchoring proof validity
+\*     \* Proof becomes valid only once the Bitcoin anchor has caught up to the submission height (i.e., the OP_RETURN tx is confirmed).
+\*     /\ reanchoring_proof_valid' =
+\*            IF state = "RECOVERING"
+\*               /\ h_btc_anchored' >= h_btc_submitted'
+\*               /\ h_btc_submitted' > 0
+\*            THEN TRUE
+\*            ELSE FALSE
+\*     /\ UNCHANGED <<state, safe_blocks, suspicious_duration>>
+\*     /\ UNCHANGED <<censorshipVars>>
+
+
+\* TẠM THỜI GHI ĐÈ ĐỂ GIĂNG BẪY LỖI "SUSPICIOUS" (TẤT ĐỊNH 100%)
+UpdateSensors ==
+    \* 1. Ép BTC đứng im
+    /\ h_btc_current' = h_btc_current
+    /\ h_btc_submitted' = h_btc_submitted
+    /\ is_btc_spv_failed' = FALSE
+    /\ h_btc_anchored' = h_btc_anchored
+
+    \* 2. Ép DA báo lỗi (CHỈ CẦN GÁN TRUE, KHÔNG ĐƯỢC TĂNG HEIGHT)
+    /\ h_engram_current' = h_engram_current    \* <--- FIX Ở ĐÂY: Xóa bỏ + 1
+    /\ is_attestation_failed' = FALSE
+    /\ is_das_failed' = TRUE
+    /\ h_engram_verified' = h_engram_verified
+
+    \* 3. Ép P2P khỏe mạnh
+    /\ active_peers' = anchor_peers \cup {"honest_node_1"}
+    /\ peer_churn_rate' = 0
+    /\ avg_peer_tenure' = MIN_AVG_TENURE + 10
+    /\ peer_latency' = 0
+    /\ anchor_peers' = anchor_peers
+    /\ blacklisted_peers' = blacklisted_peers
+
+    \* 4. Khóa các biến trạng thái còn lại
+    /\ reanchoring_proof_valid' = FALSE
     /\ UNCHANGED <<state, safe_blocks, suspicious_duration>>
     /\ UNCHANGED <<censorshipVars>>
 

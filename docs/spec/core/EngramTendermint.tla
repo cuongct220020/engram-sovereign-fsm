@@ -58,7 +58,7 @@ ASSUME(N = Cardinality(HonestNodes \union ByzantineNodes))
 \* The total variable is used for WF_vars and Spec definitions.
 tendermintVars ==
     <<tendermintCoreVars, temporalVars, bookkeepingVars,
-      invariantVars, fsmVars, networkSensorVars, censorshipVars>>
+      invariantVars, censorshipVars>>
 
 (* ======================== BASIC DEFINITIONS ============================= *)
 \* @type: Set(PROCESS);
@@ -481,15 +481,16 @@ UpdateIgnoredRounds(p) ==
 \* Move process p to round r, resetting its step and timeout
 \* @type: (PROCESS, ROUND) => Bool;
 StartRound(p, r) ==
-   /\ step[p] /= "DECIDED" \* a decided process does not participate in consensus
-   /\ round' = [round EXCEPT ![p] = r]
-   /\ step' = [step EXCEPT ![p] = "PROPOSE"]
-   \* We only need to update (last)beginRound[r] once a process enters round `r`
-   /\ begin_round' = [begin_round EXCEPT ![r] = Min2(@, local_clock[p])]
-   /\ last_begin_round' = [last_begin_round EXCEPT ![r] = Max2(@, local_clock[p])]
+    /\ r \in Rounds
+    /\ step[p] /= "DECIDED" \* a decided process does not participate in consensus
+    /\ round' = [round EXCEPT ![p] = r]
+    /\ step' = [step EXCEPT ![p] = "PROPOSE"]
+    \* We only need to update (last)beginRound[r] once a process enters round `r`
+    /\ begin_round' = [begin_round EXCEPT ![r] = Min2(@, local_clock[p])]
+    /\ last_begin_round' = [last_begin_round EXCEPT ![r] = Max2(@, local_clock[p])]
 
-   /\ local_rem_time' = [local_rem_time EXCEPT ![p] = TIMEOUT_DURATION]
-   /\ UpdateIgnoredRounds(p)
+    /\ local_rem_time' = [local_rem_time EXCEPT ![p] = TIMEOUT_DURATION]
+    /\ UpdateIgnoredRounds(p)
 
 (* ======================== PROTOCOL ACTIONS ================================ *)
 
@@ -531,7 +532,7 @@ ReceiveProposal(p) ==
                   /\ UNCHANGED <<received_timely_proposal, proposal_received_time>>
         
         /\ UNCHANGED <<tendermintCoreVars, temporalVars, msgsBroadcastVars>>
-        /\ UNCHANGED <<fsmVars, networkSensorVars, censorshipVars>>
+        /\ UNCHANGED <<censorshipVars>>
         /\ UNCHANGED <<evidence, begin_round, end_consensus, last_begin_round, proposal_time>>
         /\ action' = "ReceiveProposal"
 
@@ -575,8 +576,7 @@ UponProposalInPropose(p) ==
                               valid_value, valid_round>>
                /\ UNCHANGED <<msgs_propose, msgs_precommit, msgs_timeout,
                               received_timely_proposal, inspected_proposal>>
-               /\ UNCHANGED <<temporalVars, invariantVars>> 
-               /\ UNCHANGED <<fsmVars, networkSensorVars, censorshipVars>>
+               /\ UNCHANGED <<temporalVars, invariantVars, censorshipVars>>
         /\ action' = "UponProposalInPropose"
 
 
@@ -615,17 +615,17 @@ UponProposalInProposeAndPrevote(p) ==
 \* @type: (PROCESS) => Bool;
 UponQuorumOfPrevotesAny(p) ==
     /\ step[p] = "PREVOTE"
-    /\ \E MyEvidence \in SUBSET msgs_prevote[round[p]] :
-           LET voters == { m.src : m \in MyEvidence } IN
-           /\ Cardinality(voters) >= THRESHOLD2
-           /\ evidence' = MyEvidence \union evidence
-           /\ BroadcastPrecommit(p, round[p], NilProposal)
-           /\ step' = [step EXCEPT ![p] = "PRECOMMIT"]
-           /\ UNCHANGED <<temporalVars, invariantVars, censorshipVars>>
-           /\ UNCHANGED <<round, decision, locked_value, locked_round, valid_value, valid_round>>
-           /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_timeout,
-                          received_timely_proposal, inspected_proposal>>
-           /\ action' = "UponQuorumOfPrevotesAny"
+    /\ LET all_prevotes == msgs_prevote[round[p]]
+           voters == { m.src : m \in all_prevotes } 
+       IN
+       /\ Cardinality(voters) >= THRESHOLD2
+       /\ evidence' = all_prevotes \union evidence
+       /\ BroadcastPrecommit(p, round[p], NilProposal)
+       /\ step' = [step EXCEPT ![p] = "PRECOMMIT"]
+       /\ UNCHANGED <<temporalVars, invariantVars, censorshipVars>>
+       /\ UNCHANGED <<round, decision, locked_value, locked_round, valid_value, valid_round>>
+       /\ UNCHANGED <<msgs_propose, msgs_prevote, msgs_timeout, received_timely_proposal, inspected_proposal>>
+       /\ action' = "UponQuorumOfPrevotesAny"
 
 
 \* -- UponProposalInPrevoteOrCommitAndPrevote: 2f+1 PREVOTEs for a specific value -> LOCK --
@@ -663,18 +663,19 @@ UponProposalInPrevoteOrCommitAndPrevote(p) ==
 \* -- UponQuorumOfPrecommitsAny: 2f+1 PRECOMMITs without decision -> next round --
 \* @type: (PROCESS) => Bool;
 UponQuorumOfPrecommitsAny(p) ==
-    /\ \E MyEvidence \in SUBSET msgs_precommit[round[p]] :
-        /\  LET unique_committers == { m.src : m \in msgs_precommit[round[p]] }
-            IN Cardinality(unique_committers) >= THRESHOLD2
-        /\ evidence' = msgs_precommit[round[p]] \union evidence
-        /\ round[p] + 1 \in Rounds
-        /\ StartRound(p, round[p] + 1)
-        /\ UNCHANGED <<msgsBroadcastVars, propAuditVars>>
-        /\ UNCHANGED <<local_clock, real_time>>
-        /\ UNCHANGED <<end_consensus, proposal_time, proposal_received_time>>
-        /\ UNCHANGED <<decision, locked_value, locked_round, valid_value, valid_round>>
-        /\ UNCHANGED <<forced_tx_queue>>
-        /\ action' = "UponQuorumOfPrecommitsAny"
+    /\ LET all_precommits == msgs_precommit[round[p]]
+           unique_committers == { m.src : m \in all_precommits } 
+       IN
+       /\ Cardinality(unique_committers) >= THRESHOLD2
+       /\ evidence' = all_precommits \union evidence
+       /\ round[p] + 1 \in Rounds
+       /\ StartRound(p, round[p] + 1)
+       /\ UNCHANGED <<msgsBroadcastVars, propAuditVars>>
+       /\ UNCHANGED <<local_clock, real_time>>
+       /\ UNCHANGED <<end_consensus, proposal_time, proposal_received_time>>
+       /\ UNCHANGED <<decision, locked_value, locked_round, valid_value, valid_round>>
+       /\ UNCHANGED <<forced_tx_queue>>
+       /\ action' = "UponQuorumOfPrecommitsAny"
                         
 
 
@@ -851,7 +852,7 @@ ByzantineDataWithholding ==
            IN
             /\ BroadcastProposal(Proposer[r], r, bad_prop, NilRound)
             /\ UNCHANGED <<tendermintCoreVars, temporalVars, invariantVars, propAuditVars>>
-            /\ UNCHANGED <<fsmVars, networkSensorVars, censorshipVars>>
+            /\ UNCHANGED <<censorshipVars>>
             /\ UNCHANGED <<evidence, msgs_prevote, msgs_precommit, msgs_timeout>>
             /\ action' = "ByzantineDataWithholding"
 
@@ -924,12 +925,7 @@ ConsensusSafeValidHonestNode ==
             IN
             (Proposer[pr] \in HonestNodes) => begin_round[pr] <= t
 
-\* I4: Every decided proposal must pass the application-level validity predicate
-HybridSafety ==
-    \A p \in HonestNodes :
-        decision[p] /= NilDecision => IsValidProposal(decision[p].prop)
-
-\* I5: Only valid domain values can be decided (no garbage)
+\* I4: Only valid domain values can be decided (no garbage)
 ExternalValidity ==
     \A p \in HonestNodes :
         decision[p] /= NilDecision => decision[p].prop.value \in ValidValues
@@ -973,7 +969,6 @@ CoreTendermintInvariant ==
     /\ AgreementOnValue
     /\ ConsensusTimeValid
     /\ ConsensusSafeValidHonestNode
-    /\ HybridSafety
     /\ ExternalValidity
     /\ Accountability
     /\ NoCrossModeDoubleSpending

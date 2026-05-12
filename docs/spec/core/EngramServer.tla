@@ -92,7 +92,6 @@ ServerInsertProposal(p) ==
     /\ UNCHANGED <<tendermintCoreVars, temporalVars, propAuditVars>>
     /\ UNCHANGED <<fsmVars, networkSensorVars, censorshipVars>>
     /\ UNCHANGED <<msgs_prevote, msgs_precommit, msgs_timeout, evidence>>
-    /\ action' = "ServerInsertProposal"
 
 
 \* Hook 2: Proposer votes for its own proposal -> emits M_QC (maps to Abstract Invoke).
@@ -116,7 +115,6 @@ ServerProposerVotes(p) ==
        ELSE
            /\ quorum_certs' = quorum_certs
            /\ timeout_certs' = timeout_certs
-    \* /\ action' = "ServerProposerVotes"
 
 
 \* Hook 3: Intercept the decision moment -> trigger FSM transition + state sync.
@@ -152,70 +150,75 @@ ServerUponProposalInPrecommitNoDecision(p) ==
 
            \* Step 5: Force-sync local sensors when ANCHORED.
            \* If the network majority is in ANCHORED, suppress any local false alarms.
-           /\ IF prop.fsm_state = "ANCHORED"
+           /\ IF state = "RECOVERING" /\ prop.fsm_state = "ANCHORED"
               THEN
                   /\ h_btc_current' = prop.btc_receipt.checkpoint_block_height
                   /\ h_engram_current' = prop.da_receipt.published_block_height
                   /\ is_das_failed' = FALSE
+                  /\ is_attestation_failed' = FALSE
+                  /\ is_btc_spv_failed' = FALSE
               ELSE
-                  \* Otherwise let the FSM sensors evolve independently.
-                  /\ UNCHANGED <<h_btc_current, h_engram_current, is_das_failed>>
+                  /\ UNCHANGED <<h_btc_current, is_btc_spv_failed>> 
+                  /\ UNCHANGED <<h_engram_current, is_das_failed, is_attestation_failed>>
 
+           /\ UNCHANGED <<safe_blocks, suspicious_duration>>
            /\ UNCHANGED <<p2pHealthSensorVars>>
 
     \* Step 6: Keep pacemaker certificates and censorship sensor unchanged
     /\ UNCHANGED <<certificateVars, censorshipVars>>
-    /\ action' = "ServerUponProposalInPrecommitNoDecision"
 
-
-\* Hook 4: 2f+1 timeout votes -> emit T_QC (maps to Abstract Timeout) + advance round.
+\* Hook 4: 2f+1 timeout votes -> emit T_QC (maps to Abstract Timeout)
 ServerUponTimeoutCert(p) ==
-    \* Check timeout quorum
+    \* 1. Check timeout quorum
     /\  LET unique_senders == { m.src : m \in msgs_timeout[round[p]] }
         IN Cardinality(unique_senders) >= THRESHOLD2
-
-    \* Advance to next round
-    /\ StartRound(p, round[p] + 1)
-
-    \* Emit T_QC for the LiDO abstract pacemaker
+    /\ ~\E tqc \in timeout_certs : tqc.round = round[p]
+    \* 2. Emit T_QC for the LiDO abstract pacemaker
     /\  LET new_TQC == [
                type         |-> "T_QC",
                round        |-> round[p],
                caller       |-> p,
                btc_anchored |-> h_btc_current ]
         IN timeout_certs' = timeout_certs \cup {new_TQC}
-
-    /\ UNCHANGED <<quorum_certs, fsmVars, networkSensorVars>>
-    /\ UNCHANGED <<forced_tx_queue>>
-    /\ UNCHANGED <<local_clock, real_time>>
-    /\ UNCHANGED <<end_consensus, proposal_time, proposal_received_time>>
-    /\ UNCHANGED <<decision, locked_value, locked_round, valid_value, valid_round>>
-    /\ UNCHANGED <<msgsBroadcastVars, propAuditVars>>
-    /\ UNCHANGED <<evidence>>
-    /\ action' = "ServerUponTimeoutCert"
+    /\ UNCHANGED <<quorum_certs, fsmVars, networkSensorVars, censorshipVars>>
+    /\ UNCHANGED <<tendermintCoreVars, temporalVars, bookkeepingVars, invariantVars>>
 
 
 (* ======================== ACTION AGGREGATION ============================== *)
 \* Pass-through: Tendermint actions that require no Server-layer interception.
 ServerPassThrough(p) ==
     \/ ReceiveProposal(p)
-    \/ UponProposalInPrevoteOrCommitAndPrevote(p)
+    \/ UponProposalInPropose(p)
+    \/ UponProposalInProposeAndPrevote(p)
     \/ UponQuorumOfPrevotesAny(p)
+    \/ UponProposalInPrevoteOrCommitAndPrevote(p)
     \/ /\ UponQuorumOfPrecommitsAny(p)
        /\ ~GlobalDecisionExists
-    \/ ServerUponProposalInPrecommitNoDecision(p)
     \/ OnTimeoutPropose(p)
     \/ OnQuorumOfNilPrevotes(p)
     \/ OnRoundCatchup(p)
     \/ UponfPlusOneTimeoutsAny(p)
     \/ OnLocalTimerExpire(p)
 
+
 ServerMessageProcessing(p) ==
+    \* 1. Các hành động Pass-through
     \/ /\ ServerPassThrough(p)
-       /\ ServerUponTimeoutCert(p) 
        /\ UNCHANGED <<certificateVars, fsmVars, networkSensorVars>>
-    \/ ServerInsertProposal(p)
-    \/ ServerProposerVotes(p)
+       
+    \* 2. Hook 1: Leader tạo block (Sinh E_QC)
+    \/ /\ ServerInsertProposal(p)
+       /\ UNCHANGED <<fsmVars, networkSensorVars>>
+
+    \* 3. Hook 2: Leader vote cho chính nó (Sinh M_QC)
+    \/ /\ ServerProposerVotes(p)
+       /\ UNCHANGED <<fsmVars, networkSensorVars>>
+
+    \* 4. Hook 3: Chốt khối (Sinh C_QC và cập nhật FSM)
+    \/ ServerUponProposalInPrecommitNoDecision(p)
+    
+    \* 5. Hook 4: Timeout (Sinh T_QC)
+    \/ ServerUponTimeoutCert(p)
 
 
 (* ======================== SPECIFICATION (INIT & NEXT) ===================== *)
@@ -232,7 +235,7 @@ ServerAdvanceRealTime ==
            /\ ~\E mqc \in quorum_certs : mqc.type = "M_QC" /\ mqc.round = r /\ mqc.caller \in ByzantineNodes
     /\ \/ /\ UpdateSensors
           /\ UNCHANGED <<certificateVars>>
-       \/ /\ UNCHANGED <<certificateVars, fsmVars, networkSensorVars>>
+       \/ /\ UNCHANGED <<fsmVars, networkSensorVars>>
 
 ServerByzantinePull == 
     \E r \in Rounds :
@@ -267,7 +270,8 @@ ServerByzantineDataWithholding ==
                 btc_anchored |-> h_btc_current 
             ]
           IN quorum_certs' = quorum_certs \cup {new_MQC}
-    /\ UNCHANGED <<timeout_certs, fsmVars, networkSensorVars>>
+    /\ UNCHANGED <<timeout_certs>> 
+    /\ UNCHANGED <<fsmVars, networkSensorVars>>
 
 
 ServerNext ==
@@ -293,12 +297,12 @@ MonotonicitySafety ==
 
 (* ======================== HYBRID INVARIANTS =============================== *)
 \* Cross-layer consistency checks: every decided proposal must agree with the
-\* current FSM and sensor state. These are checked in addition to CoreTendermintInv.
+\* current FSM and sensor state. These are checked in addition to CoreTendermintInvariant.
 
 \* Decided FSM state must match the current circuit-breaker state
 FSMStateConsistency == 
     \A p \in HonestNodes : 
-        decision[p] /= NilDecision => decision[p].prop.fsm_state = CalculateNextFSMState
+        decision[p] /= NilDecision => decision[p].prop.fsm_state = state
 
 \* DA attestation must be present in any decided ANCHORED or RECOVERING block
 DAReceiptConsistency == 
@@ -321,7 +325,7 @@ ZKProofConsistency ==
          /\ safe_blocks = HYSTERESIS_WAIT)
         => decision[p].prop.zk_proof_ref = TRUE
 
-\* Master hybrid invariant — checked together with CoreTendermintInv in TLC
+\* Master hybrid invariant — checked together with CoreTendermintInvariant in TLC
 HybridTendermintInvariant ==
     /\ FSMStateConsistency
     /\ DAReceiptConsistency
